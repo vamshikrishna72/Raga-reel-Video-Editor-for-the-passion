@@ -1,3 +1,5 @@
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 export const analyzeClips = async (files: File[], prompt: string, mood?: string, language?: string) => {
   const formData = new FormData();
   files.forEach(file => formData.append('files', file));
@@ -6,7 +8,7 @@ export const analyzeClips = async (files: File[], prompt: string, mood?: string,
   if (language) formData.append('language', language);
 
   try {
-    const response = await fetch('http://localhost:3001/api/analyze', {
+    const response = await fetch(`${API_BASE_URL}/api/analyze`, {
       method: 'POST',
       body: formData,
     });
@@ -37,7 +39,7 @@ export const renderVideo = async (
   if (songArtist) formData.append('songArtist', songArtist);
 
   try {
-    const response = await fetch('http://localhost:3001/api/process', {
+    const response = await fetch(`${API_BASE_URL}/api/process`, {
       method: 'POST',
       body: formData,
     });
@@ -51,7 +53,7 @@ export const renderVideo = async (
 
 export const reviseStoryboard = async (projectId: string, instruction: string) => {
   try {
-    const response = await fetch('http://localhost:3001/api/reedit', {
+    const response = await fetch(`${API_BASE_URL}/api/reedit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectId, instruction })
@@ -66,7 +68,7 @@ export const reviseStoryboard = async (projectId: string, instruction: string) =
 
 export const getKeysStatus = async () => {
   try {
-    const response = await fetch('http://localhost:3001/api/keys/status');
+    const response = await fetch(`${API_BASE_URL}/api/keys/status`);
     if (!response.ok) throw new Error('Failed to fetch API keys status');
     return await response.json();
   } catch (error) {
