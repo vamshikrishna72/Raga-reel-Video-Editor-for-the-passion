@@ -77,6 +77,14 @@ async function checkApiKeysStatus() {
 }
 checkApiKeysStatus();
 
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    message: 'RaagaReel AI Creative Director Backend Server is Live!',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/api/keys/status', async (req, res) => {
   await checkApiKeysStatus();
   res.json(apiStatusCache);
