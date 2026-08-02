@@ -212,6 +212,10 @@ function calculateBeats(bpm, duration = 30) {
 
 // Multi-phase Gemini Creative Director Plan generator
 async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
+  const promptLower = (prompt || '').toLowerCase();
+  const textKeywords = ['text', 'caption', 'subtitles', 'subtitle', 'title', 'hook', 'words', 'quote', 'overlay', 'written'];
+  const userRequestedText = textKeywords.some(kw => promptLower.includes(kw));
+
   const defaultPlan = {
     theme: prompt || 'lifestyle video',
     storyboard: analyzedClips.map((clip, i) => ({
@@ -228,9 +232,9 @@ async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
       bpm: 128
     },
     color_grading: 'cinematic_teal_orange',
-    text_overlays: [
-      { text: prompt || 'Wait for it... 👀', startTime: 0, endTime: 2.5, style: 'hook' }
-    ]
+    text_overlays: userRequestedText ? [
+      { text: prompt, startTime: 0, endTime: 2.5, style: 'hook' }
+    ] : []
   };
 
   if (!process.env.GEMINI_API_KEY) return defaultPlan;
@@ -258,9 +262,9 @@ HUMAN EDITOR MODE INSTRUCTIONS:
    - Pick specific, high-scoring candidate windows (e.g. startTime: 2.2, duration: 3.0) where faces, smiles, peak action, or camera pans occur.
    - Omit low-quality or repetitive clips.
 
-3. HOOK ENGINE & TYPOGRAPHY:
-   - Generate a high-retention text hook for the first 2-3 seconds (e.g., "Wait for it...", "POV: Core Memory Unlocked", "This changed everything", "Unleash Your Power").
-   - Add minimal, meaningful subtitle captions for key storytelling beats.
+3. TYPOGRAPHY & TEXT OVERLAYS RULE:
+   - CRITICAL STRICT RULE: ONLY generate "text_overlays" if the user prompt EXPLICITLY requests text, titles, hooks, quotes, or captions (e.g. user prompt contains words like "caption", "text", "subtitle", "title", "quote", "hook").
+   - IF THE USER PROMPT DOES NOT EXPLICITLY ASK FOR TEXT/CAPTIONS, YOU MUST RETURN AN EMPTY ARRAY: "text_overlays": []. Do NOT generate default text hooks or theme titles unless explicitly requested!
 
 4. RESTRAINED TRANSITION DIRECTING:
    - Transition options: ["cuts", "fade", "flash", "blur", "zoom", "whip_left", "whip_right", "glitch", "rgb_split", "dip_black", "dip_white", "spin"]
@@ -276,7 +280,7 @@ Return a JSON object with this exact structure:
   "music_recommendation": { "songName": "suggested track style", "mood": "hype/chill/romantic/cinematic/travel/motivation/emotional", "bpm": number },
   "storyboard": [
     {
-      "sceneTitle": "Hook / Scene 1",
+      "sceneTitle": "Scene 1",
       "clipIndex": number,
       "startTime": float,
       "duration": float,
@@ -284,9 +288,7 @@ Return a JSON object with this exact structure:
       "transition": "cuts/fade/flash/blur/zoom/whip_left/whip_right/glitch/rgb_split/dip_black/dip_white/spin"
     }
   ],
-  "text_overlays": [
-    { "text": "...", "startTime": float, "endTime": float, "style": "hook" or "caption" }
-  ]
+  "text_overlays": []
 }
 `;
 
@@ -766,9 +768,14 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   filterComplex += `${concatVideo}concat=n=${orderedFiles.length}:v=1:a=0[rawv]; `;
   filterComplex += `${concatAudio}concat=n=${orderedFiles.length}:v=0:a=1[rawa]; `;
 
-  // Draw Styled Text Overlays (Hook & Subtitle Captions with boxes and drop-shadows)
+  // Strict text overlay enforcement: check if user prompt explicitly requested text
+  const promptLower = (projectMetadata.prompt || '').toLowerCase();
+  const textKeywords = ['text', 'caption', 'subtitles', 'subtitle', 'title', 'hook', 'words', 'quote', 'overlay', 'written'];
+  const userRequestedText = textKeywords.some(kw => promptLower.includes(kw));
+
+  // Draw Styled Text Overlays ONLY if explicitly requested in prompt
   let videoOutputTag = 'rawv';
-  if (aiPlan.text_overlays && aiPlan.text_overlays.length > 0) {
+  if (userRequestedText && aiPlan.text_overlays && aiPlan.text_overlays.length > 0) {
     let currentVTag = 'rawv';
     aiPlan.text_overlays.forEach((overlay, idx) => {
       const nextVTag = `textv${idx}`;
@@ -805,21 +812,22 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 
   // Dynamic Audio Ducking & Loudness Normalization
   const musicInputIndex = orderedFiles.length;
-  let dynamicBgmVolume = '0.35'; // Clear full volume when no voiceover is active
+  let dynamicBgmVolume = '0.85'; // Clear loud volume when no voiceover is active
   if (voDuration > 0) {
-    dynamicBgmVolume = `if(between(t,0,${voDuration.toFixed(2)}),0.08,0.28)`;
+    dynamicBgmVolume = `if(between(t,0,${voDuration.toFixed(2)}),0.15,0.75)`;
   }
 
-  filterComplex += `[${musicInputIndex}:a]atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
+  // Seamless Audio Looping & Formatting for Selected Music Track
+  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2e+09,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
 
   // Mix background music with voice audio & apply master loudness normalization
   if (voiceoverPath) {
     const voInputIndex = musicInputIndex + 1;
     filterComplex += `[${voInputIndex}:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.8[vo]; `;
-    filterComplex += `[rawa]volume=0.2[ambient]; [bgm]volume=1.0[music]; `;
+    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
     filterComplex += `[ambient][music][vo]amix=inputs=3:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
   } else {
-    filterComplex += `[rawa]volume=0.25[ambient]; [bgm]volume=1.0[music]; `;
+    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
     filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
   }
 
