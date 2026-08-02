@@ -577,14 +577,24 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   
   // Resolve missing previewUrls in backend by searching iTunes on-the-fly
   if ((!resolvedPreviewUrl || resolvedPreviewUrl === 'undefined' || resolvedPreviewUrl === 'null') && songTitle) {
-    console.log(`Backend resolving preview URL for catalog song: ${songTitle} - ${songArtist}`);
+    console.log(`Backend resolving preview URL for catalog song: '${songTitle}' - '${songArtist}'`);
     try {
-      const term = `${songTitle} ${songArtist || ''}`;
-      const searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
-      const searchData = await searchRes.json();
+      const primaryArtist = songArtist ? songArtist.split(',')[0].trim() : '';
+      let term = `${songTitle} ${primaryArtist}`.trim();
+      let searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
+      let searchData = await searchRes.json();
+      
+      if (!searchData.results || !searchData.results[0]?.previewUrl) {
+        term = songTitle;
+        searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
+        searchData = await searchRes.json();
+      }
+
       if (searchData.results && searchData.results[0]?.previewUrl) {
         resolvedPreviewUrl = searchData.results[0].previewUrl;
-        console.log(`Successfully resolved preview URL in backend: ${resolvedPreviewUrl}`);
+        console.log(`Successfully resolved preview URL for '${songTitle}': ${resolvedPreviewUrl}`);
+      } else {
+        console.warn(`Could not resolve preview URL for song '${songTitle}'`);
       }
     } catch (err) {
       console.warn('iTunes search failed in backend:', err.message);
@@ -593,16 +603,20 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 
   if (customAudio) {
     musicPath = customAudio.path;
+    console.log(`Using custom user uploaded audio: ${musicPath}`);
   } else if (resolvedPreviewUrl && resolvedPreviewUrl !== 'undefined' && resolvedPreviewUrl !== 'null') {
     const songCacheName = 'preview-' + resolvedPreviewUrl.replace(/[^a-zA-Z0-9]/g, '_').slice(-60) + '.m4a';
     const cachedSongPath = path.join(__dirname, 'music', songCacheName);
     
     if (fs.existsSync(cachedSongPath)) {
       musicPath = cachedSongPath;
+      console.log(`Using cached soundtrack: ${musicPath}`);
     } else {
       try {
+        console.log(`Downloading soundtrack preview from ${resolvedPreviewUrl}...`);
         await downloadFile(resolvedPreviewUrl, cachedSongPath);
         musicPath = cachedSongPath;
+        console.log(`Downloaded and cached soundtrack: ${musicPath}`);
       } catch (err) {
         console.error('Failed to download custom soundtrack preview:', err);
       }
@@ -818,7 +832,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   }
 
   // Seamless Audio Looping & Formatting for Selected Music Track
-  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2e+09,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
+  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2147483647,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
 
   // Mix background music with voice audio & apply master loudness normalization
   if (voiceoverPath) {
