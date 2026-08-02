@@ -41,7 +41,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
-app.options('*', cors());
 app.use(express.json());
 
 // API Keys working status verification cache
