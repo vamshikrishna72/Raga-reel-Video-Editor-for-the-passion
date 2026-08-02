@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { UploadCloud, FileVideo, X, Sparkles, Clapperboard, Wand2, Music2, Search, Play, Pause, Check, Loader2, ChevronRight, MessageSquare, ListTodo, Layers, AlertCircle } from 'lucide-react';
 import { musicCatalog, type Song } from '../services/musicCatalog';
-import { analyzeClips } from '../services/api';
+import { analyzeClips, pingBackend } from '../services/api';
 
 const Equalizer = () => (
   <div className="flex items-end gap-[2px] h-3.5 w-3.5 shrink-0">
@@ -88,6 +88,7 @@ const Upload = () => {
   const moods = ["All", "Hype", "Chill", "Cinematic", "Emotional", "Romantic", "Travel", "Motivation"];
 
   useEffect(() => {
+    pingBackend();
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();

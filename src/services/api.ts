@@ -1,4 +1,13 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const rawUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+export const API_BASE_URL = rawUrl.replace(/\/+$/, '').trim();
+
+export const pingBackend = async () => {
+  try {
+    await fetch(`${API_BASE_URL}/`, { method: 'GET' });
+  } catch (e) {
+    // Silent warm-up ping
+  }
+};
 
 export const analyzeClips = async (files: File[], prompt: string, mood?: string, language?: string) => {
   const formData = new FormData();
