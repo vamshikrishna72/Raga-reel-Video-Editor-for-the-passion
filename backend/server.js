@@ -217,19 +217,19 @@ async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
     storyboard: analyzedClips.map((clip, i) => ({
       sceneTitle: `Scene ${i + 1}`,
       clipIndex: i,
-      startTime: 0,
+      startTime: Math.min(1.0, (clip.metadata.duration || 5) * 0.2),
       duration: Math.min(clip.metadata.duration, 3.0),
-      rationale: `Original clip sequence ${i}`,
+      rationale: `Human Editor Selection: Peak motion segment inside clip ${i}`,
       transition: 'cuts'
     })),
     music_recommendation: {
       songName: 'Default BGM',
-      mood: mood || 'chill',
-      bpm: 120
+      mood: mood || 'cinematic',
+      bpm: 128
     },
-    color_grading: 'default',
+    color_grading: 'cinematic_teal_orange',
     text_overlays: [
-      { text: prompt || 'RaagaReel Edit', startTime: 0, endTime: 3.0, style: 'hook' }
+      { text: prompt || 'Wait for it... 👀', startTime: 0, endTime: 2.5, style: 'hook' }
     ]
   };
 
@@ -243,32 +243,54 @@ async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
     });
 
     const systemInstruction = `
-You are RaagaReel's expert AI Creative Film Director. You analyze video clip metadata (descriptions, duration, faces, motion tags) and a user vision prompt to build a professional Edit Decision List (EDL) / Storyboard.
+You are RaagaReel's Lead AI Creative Director & Master Film Editor.
+You do NOT perform naive sequential clip editing or apply arbitrary templates.
+You edit like a human film editor: with storytelling intent, emotional pacing, shot scoring, and intentional cuts.
 
-You must design a story structure tailored to the prompt:
-- GYM theme: Hook -> Build Energy -> Climax/Peak -> Hero Ending
-- WEDDING theme: Warm Emotion -> Family/Friends -> Celebration -> Couple climax -> Soft Ending
-- TRAVEL theme: Scenic Hook -> Exploration -> High Motion Highlight -> Emotional Peak -> Sunset Outro
-- COLLEGE theme: Fun Hook -> Friendships -> Nostalgic Memories -> Heartfelt ending
+HUMAN EDITOR MODE INSTRUCTIONS:
+1. UNDERSTAND THE STORY:
+   - Identify the primary subject, mood, and storytelling arc based on the user prompt and analyzed clip metadata.
+   - Design a narrative progression: Hook (first 2s retention) -> Introduction / Context -> Energy Build / Emotion -> Peak Climax -> Impactful Outro.
 
-Create an emotional story arc, reordering clips for storytelling flow. Don't blindly use clip start=0. Pick highlight windows of the clips (e.g. start at 2.4s for a 6s clip) where action or faces occur.
-Transitions options: cuts, fade, flash, blur, zoom, whip_left, whip_right, glitch. Professional editing uses transitions selectively—do not put dynamic transitions between every scene unless it's a high-energy edit.
+2. SHOT SELECTION & SCORING:
+   - Never use upload order unless it happens to be narratively superior.
+   - Do NOT start clips at startTime = 0 unless the peak action starts immediately at t=0.
+   - Pick specific, high-scoring candidate windows (e.g. startTime: 2.2, duration: 3.0) where faces, smiles, peak action, or camera pans occur.
+   - Omit low-quality or repetitive clips.
 
-Return a JSON object with:
-- "theme": overall thematic title
-- "color_grading": one of: vivid, warm, gritty, dreamy, luxury, pop, cyberpunk, vintage, default
-- "music_recommendation": { "songName": "suggested catalog style", "mood": "hype/chill/romantic/cinematic/travel/motivation/emotional", "bpm": number }
-- "storyboard": array of scenes in sequence. Each scene has:
-    - "sceneTitle": e.g. "Opening Hook", "Friendship Build-up", "Peak Moment", "Nostalgic Outro"
-    - "clipIndex": index of clip in the uploaded files
-    - "startTime": float (start timestamp in seconds inside original clip)
-    - "duration": float (duration of segment, usually 1.5s to 4.5s)
-    - "rationale": explanation of why this segment was selected (e.g., "Captures a smiling face during camera pan")
-    - "transition": transition to apply after this clip ("fade", "flash", "blur", "zoom", "whip_left", "whip_right", "glitch", "cuts")
-- "text_overlays": array of { "text": "...", "startTime": float, "endTime": float, "style": "hook" or "caption" or "subtitle" }
+3. HOOK ENGINE & TYPOGRAPHY:
+   - Generate a high-retention text hook for the first 2-3 seconds (e.g., "Wait for it...", "POV: Core Memory Unlocked", "This changed everything", "Unleash Your Power").
+   - Add minimal, meaningful subtitle captions for key storytelling beats.
+
+4. RESTRAINED TRANSITION DIRECTING:
+   - Transition options: ["cuts", "fade", "flash", "blur", "zoom", "whip_left", "whip_right", "glitch", "rgb_split", "dip_black", "dip_white", "spin"]
+   - Professional editing uses restraint: use "cuts" for rhythm, and select dynamic transitions ("flash", "zoom", "glitch") specifically on emotional or musical beat shifts.
+
+5. CINEMATIC COLOR GRADING:
+   - Choose one color grading preset that best fits the mood: ["vivid", "warm", "gritty", "dreamy", "luxury", "pop", "cyberpunk", "vintage", "cinematic_teal_orange", "default"]
+
+Return a JSON object with this exact structure:
+{
+  "theme": "overall thematic title",
+  "color_grading": "preset_name",
+  "music_recommendation": { "songName": "suggested track style", "mood": "hype/chill/romantic/cinematic/travel/motivation/emotional", "bpm": number },
+  "storyboard": [
+    {
+      "sceneTitle": "Hook / Scene 1",
+      "clipIndex": number,
+      "startTime": float,
+      "duration": float,
+      "rationale": "Detailed human editor explanation for selecting this specific shot and timing window",
+      "transition": "cuts/fade/flash/blur/zoom/whip_left/whip_right/glitch/rgb_split/dip_black/dip_white/spin"
+    }
+  ],
+  "text_overlays": [
+    { "text": "...", "startTime": float, "endTime": float, "style": "hook" or "caption" }
+  ]
+}
 `;
 
-    const requestPrompt = `User Prompt: "${prompt}"\nDesired Mood: "${mood}"\nDesired Language: "${language}"\n\nUploaded Clips:\n${JSON.stringify(analyzedClips, null, 2)}`;
+    const requestPrompt = `User Prompt: "${prompt}"\nDesired Mood: "${mood}"\nDesired Language: "${language}"\n\nUploaded Clips Metadata & Frame Analysis:\n${JSON.stringify(analyzedClips, null, 2)}`;
 
     const result = await model.generateContent([systemInstruction, requestPrompt]);
     const planText = result.response.text();
@@ -660,7 +682,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   let colorFilter = '';
   switch (aiPlan.color_grading?.toLowerCase()) {
     case 'vivid':
-      colorFilter = ',eq=contrast=1.2:saturation=1.35:brightness=0.01';
+      colorFilter = ',eq=contrast=1.22:saturation=1.38:brightness=0.01';
       break;
     case 'warm':
       colorFilter = ',colorbalance=rs=0.1:gs=0.04:bs=-0.06,eq=contrast=1.05:saturation=1.12';
@@ -683,12 +705,15 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     case 'vintage':
       colorFilter = ',colorbalance=rs=0.08:gs=0.06:bs=-0.05,eq=contrast=0.95:saturation=0.85';
       break;
+    case 'cinematic_teal_orange':
+      colorFilter = ',colorbalance=rs=0.12:gs=-0.04:bs=-0.1:rh=-0.08:gh=0.04:bh=0.14,eq=contrast=1.18:saturation=1.2';
+      break;
     default:
       colorFilter = ',eq=contrast=1.08:saturation=1.12';
       break;
   }
 
-  // Process video segments with Smart Background Blur & Motion Transitions
+  // Process video segments with Smart Background Blur & Human Director Transitions
   orderedFiles.forEach((file, index) => {
     const dur = file.duration;
     const trans = file.transition;
@@ -709,6 +734,12 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
       transFilter = `,boxblur=22:enable='gt(t,${(dur - 0.2).toFixed(2)})'`;
     } else if (trans === 'glitch') {
       transFilter = `,rgbashift=rh=8:rv=-8:enable='lt(t,0.15)+gt(t,${(dur - 0.15).toFixed(2)})'`;
+    } else if (trans === 'rgb_split') {
+      transFilter = `,rgbashift=rh=10:bv=-10:enable='lt(t,0.2)+gt(t,${(dur - 0.2).toFixed(2)})'`;
+    } else if (trans === 'dip_black') {
+      transFilter = `,fade=t=in:st=0:d=0.3:color=black,fade=t=out:st=${(dur - 0.3).toFixed(2)}:d=0.3:color=black`;
+    } else if (trans === 'dip_white') {
+      transFilter = `,fade=t=in:st=0:d=0.25:color=white,fade=t=out:st=${(dur - 0.25).toFixed(2)}:d=0.25:color=white`;
     }
 
     // Smart Background Blur Fill: Scales background to fill canvas and blurs, while overlaying sharp foreground
