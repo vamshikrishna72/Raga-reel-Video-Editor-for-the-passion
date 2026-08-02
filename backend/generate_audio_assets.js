@@ -45,78 +45,55 @@ function generateSamples(mood, durationSec = 10, sampleRate = 8000) {
 
     switch (mood) {
       case 'hype': {
-        // Fast, high-energy pulsing beat
-        const pulse = Math.floor(t * 5.5) % 2; // ~165 BPM pulse
+        const pulse = Math.floor(t * 5.5) % 2;
         if (pulse === 0) {
-          // Pulse on: alternating bass kick and synth tone
           const f = t % 0.36 < 0.18 ? 80 : 350;
           val = Math.sin(2 * Math.PI * f * t) * maxAmplitude;
         } else {
-          // Pulse off: quiet snare hiss
           val = (Math.random() - 0.5) * (maxAmplitude * 0.15);
         }
         break;
       }
       case 'emotional': {
-        // Slow warm flowing pad/chord
-        // A2 (110Hz) + C#3 (138Hz) + E3 (165Hz)
-        val = (Math.sin(2 * Math.PI * 110 * t) +
-               Math.sin(2 * Math.PI * 138 * t) +
-               Math.sin(2 * Math.PI * 165 * t)) / 3 * maxAmplitude;
-        // Fade in/out slightly to sound smooth
-        const envelope = Math.sin(Math.PI * t / durationSec);
-        val *= envelope;
+        const f1 = 220 + Math.sin(2 * Math.PI * 0.2 * t) * 20;
+        const f2 = 277.18 + Math.sin(2 * Math.PI * 0.15 * t) * 15;
+        val = (Math.sin(2 * Math.PI * f1 * t) * 0.5 + Math.sin(2 * Math.PI * f2 * t) * 0.5) * maxAmplitude;
         break;
       }
       case 'romantic': {
-        // Sweet mid-frequency alternating melody
-        // E4 (330Hz) and G#4 (415Hz)
-        const notes = [330, 415, 330, 494]; // E4, G#4, E4, B4
-        const noteIdx = Math.floor(t * 1.5) % notes.length;
-        const currentFreq = notes[noteIdx];
-        val = Math.sin(2 * Math.PI * currentFreq * t) * maxAmplitude * 0.7;
-        
-        // Add a soft sub-octave support
-        val += Math.sin(2 * Math.PI * (currentFreq / 2) * t) * maxAmplitude * 0.3;
+        const f = 261.63 + Math.sin(2 * Math.PI * 0.1 * t) * 30;
+        val = Math.sin(2 * Math.PI * f * t) * maxAmplitude * 0.8;
         break;
       }
       case 'cinematic': {
-        // Deep epic bass drone with rising sweep
-        const baseFreq = 55; // A1
-        const sweep = Math.sin(t * 0.2) * 10; // slow sweep modulation
-        val = (Math.sin(2 * Math.PI * (baseFreq + sweep) * t) + 
-               Math.sin(2 * Math.PI * (baseFreq * 2 + sweep) * t) * 0.5) * maxAmplitude;
+        const f = 110 + Math.sin(2 * Math.PI * 0.05 * t) * 40;
+        const brass = Math.sin(2 * Math.PI * f * t) + 0.3 * Math.sin(2 * Math.PI * f * 2 * t);
+        val = Math.max(-1, Math.min(1, brass)) * maxAmplitude * 0.85;
         break;
       }
       case 'travel': {
-        // Light, bouncy arpeggio
-        const notes = [220, 275, 330, 440]; // A3, C#4, E4, A4
-        const noteIdx = Math.floor(t * 4) % notes.length;
-        const currentFreq = notes[noteIdx];
-        val = Math.sin(2 * Math.PI * currentFreq * t) * maxAmplitude * 0.7;
-        
-        // Bouncy pluck envelope
-        const pluck = 1.0 - ((t * 4) % 1.0);
-        val *= pluck;
+        const f1 = 330;
+        const f2 = 392;
+        const rhythm = Math.floor(t * 3) % 2 === 0 ? f1 : f2;
+        val = Math.sin(2 * Math.PI * rhythm * t) * maxAmplitude * 0.7;
         break;
       }
       case 'motivation': {
-        // Fast rising sweeps
-        const speed = t % 1.0; // rises every second
-        const f = 150 + speed * 250;
-        val = Math.sin(2 * Math.PI * f * t) * maxAmplitude;
+        const f = 146.83 + (t % 2) * 50;
+        val = (Math.sin(2 * Math.PI * f * t) > 0 ? 0.7 : -0.7) * maxAmplitude * 0.6;
         break;
       }
       case 'chill':
       default: {
-        // Binaural relaxation wave (220Hz + 221Hz)
-        val = (Math.sin(2 * Math.PI * 220 * t) + Math.sin(2 * Math.PI * 221 * t)) / 2 * maxAmplitude;
+        const f = 174.61 + Math.sin(2 * Math.PI * 0.08 * t) * 10;
+        val = Math.sin(2 * Math.PI * f * t) * maxAmplitude * 0.6;
         break;
       }
     }
-    
+
     samples[i] = Math.max(-32768, Math.min(32767, val));
   }
+
   return samples;
 }
 
@@ -126,21 +103,17 @@ function generateAllAssets() {
     fs.mkdirSync(musicDir, { recursive: true });
   }
 
-  console.log('Generating audio assets for moods & languages...');
-  
   for (const language of LANGUAGES) {
     for (const mood of MOODS) {
       const fileName = `${language}_${mood}.wav`;
       const filePath = path.join(musicDir, fileName);
+      if (fs.existsSync(filePath)) continue;
       
-      // Let's generate a 15-second track to be safe with longer videos
       const samples = generateSamples(mood, 15, 8000);
       const buffer = createWavBuffer(samples, 8000);
-      
       fs.writeFileSync(filePath, buffer);
     }
   }
-  console.log(`Successfully generated ${LANGUAGES.length * MOODS.length} audio tracks in ${musicDir}`);
 }
 
 module.exports = { generateAllAssets };

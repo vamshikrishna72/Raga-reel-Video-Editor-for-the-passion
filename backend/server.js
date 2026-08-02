@@ -768,7 +768,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 
     // Smart Background Blur Fill: Scales background to fill canvas and blurs, while overlaying sharp foreground
     filterComplex += `[${index}:v]split=2[bgin_${index}][fgin_${index}]; `;
-    filterComplex += `[bgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},gblur=sigma=28:steps=2,eq=brightness=-0.18:contrast=0.9[bg_${index}]; `;
+    filterComplex += `[bgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},boxblur=16:2,eq=brightness=-0.18:contrast=0.9[bg_${index}]; `;
     filterComplex += `[fgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease[fg_${index}]; `;
     filterComplex += `[bg_${index}][fg_${index}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p${colorFilter}${zoomFilter}${transFilter}[v${index}]; `;
 
@@ -877,7 +877,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     .outputOptions(renderProxies ? '-maxrate 2.5M' : '-maxrate 7M')
     .outputOptions(renderProxies ? '-bufsize 4M' : '-bufsize 10M')
     .outputOptions('-movflags +faststart')
-    .outputOptions('-threads 4')
+    .outputOptions('-threads 2')
     .outputOptions('-pix_fmt yuv420p')
     .outputOptions('-c:a aac')
     .outputOptions('-b:a 192k')
