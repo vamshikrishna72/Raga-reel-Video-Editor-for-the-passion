@@ -106,6 +106,10 @@ if (fs.existsSync('C:/Windows/Fonts/arial.ttf')) {
   fontPath = 'C\\:/Windows/Fonts/arial.ttf';
 } else if (fs.existsSync('C:/Windows/Fonts/Arial.ttf')) {
   fontPath = 'C\\:/Windows/Fonts/Arial.ttf';
+} else if (fs.existsSync('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')) {
+  fontPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+} else if (fs.existsSync('/usr/share/fonts/dejavu/DejaVuSans.ttf')) {
+  fontPath = '/usr/share/fonts/dejavu/DejaVuSans.ttf';
 }
 
 // Audio stream check & detailed metadata extractor
@@ -928,9 +932,13 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
         qualityControl: 'PASSED'
       };
 
+      const host = req.get('host');
+      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      const baseUrl = `${protocol}://${host}`;
+
       res.json({
         status: 'success',
-        videoUrl: `http://localhost:3001/outputs/${outputFileName}`,
+        videoUrl: `${baseUrl}/outputs/${outputFileName}`,
         caption: aiPlan.caption || 'Created with RaagaReel AI',
         hook: voicePrompt || 'Wait for it... 👀',
         qualityScore: 92,
@@ -939,7 +947,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     })
     .on('error', (err, stdout, stderr) => {
       console.error('FFmpeg Render Error:', err.message);
-      res.status(500).json({ error: 'Video rendering failed' });
+      res.status(500).json({ error: `Video rendering failed: ${err.message}` });
     })
     .save(outputPath);
 });
