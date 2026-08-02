@@ -961,6 +961,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 app.use('/outputs', express.static(outputDir));
 app.use('/music', express.static(path.join(__dirname, 'music')));
 
-app.listen(3001, () => {
-  console.log('RaagaReel AI Director Backend running on http://localhost:3001');
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`RaagaReel AI Director Backend running on port ${PORT}`);
 });
