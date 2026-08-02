@@ -43,7 +43,10 @@ export const renderVideo = async (
       method: 'POST',
       body: formData,
     });
-    if (!response.ok) throw new Error('Video rendering failed');
+    if (!response.ok) {
+      const errRes = await response.json().catch(() => ({ error: `HTTP ${response.status}: ${response.statusText}` }));
+      throw new Error(errRes.error || `HTTP ${response.status} Error`);
+    }
     return await response.json();
   } catch (error) {
     console.error("API Process Error:", error);

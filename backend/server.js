@@ -873,13 +873,14 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 
   // Execute FFmpeg with high-performance bitrate and streaming options
   const startTimer = Date.now();
+  const isCloudEnv = !!process.env.RENDER || !!process.env.PORT || renderProxies;
   command
     .complexFilter(filterComplex, [videoOutputTag, 'outa'])
     .outputOptions('-c:v libx264')
-    .outputOptions(renderProxies ? '-preset ultrafast' : '-preset fast')
-    .outputOptions(renderProxies ? '-b:v 1.5M' : '-b:v 5M')
-    .outputOptions(renderProxies ? '-maxrate 2.5M' : '-maxrate 7M')
-    .outputOptions(renderProxies ? '-bufsize 4M' : '-bufsize 10M')
+    .outputOptions(isCloudEnv ? '-preset ultrafast' : '-preset fast')
+    .outputOptions(isCloudEnv ? '-b:v 2.5M' : '-b:v 5M')
+    .outputOptions(isCloudEnv ? '-maxrate 3.5M' : '-maxrate 7M')
+    .outputOptions(isCloudEnv ? '-bufsize 5M' : '-bufsize 10M')
     .outputOptions('-movflags +faststart')
     .outputOptions('-threads 2')
     .outputOptions('-pix_fmt yuv420p')

@@ -182,3 +182,5 @@ export const Processing: React.FC = () => {
     </div>
   );
 };
+
+export default Processing;
