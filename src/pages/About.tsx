@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Mail, ExternalLink, Sparkles, BrainCircuit, Terminal, GraduationCap, Briefcase } from 'lucide-react';
 
 const About = () => {
-  const profileImg = "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/04d041b1-c75c-4021-9d7d-222ebd9d5089/id-preview-6c1a964a--c53eea9c-028f-460c-816b-f8eacba6d4cd.lovable.app-1773559170300.png";
+  const profileImg = "/developer.png";
 
   const skillCategories = [
     {
