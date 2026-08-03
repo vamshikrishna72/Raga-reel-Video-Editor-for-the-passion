@@ -50,8 +50,8 @@ let apiStatusCache = {
 };
 
 async function checkApiKeysStatus() {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  const elevenLabsKey = (process.env.ELEVENLABS_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
 
   if (!geminiKey) {
     apiStatusCache.gemini = 'missing';
@@ -256,10 +256,11 @@ async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
     ] : []
   };
 
-  if (!process.env.GEMINI_API_KEY) return defaultPlan;
+  const rawKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!rawKey) return defaultPlan;
 
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const genAI = new GoogleGenerativeAI(rawKey);
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: { responseMimeType: "application/json" }

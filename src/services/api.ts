@@ -9,6 +9,20 @@ export const pingBackend = async () => {
   }
 };
 
+const fetchWithRetry = async (url: string, options: RequestInit, retries: number = 2, delayMs: number = 2500): Promise<Response> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      return res;
+    } catch (err: any) {
+      if (attempt === retries) throw err;
+      console.warn(`Fetch attempt ${attempt + 1} failed (${err?.message || 'Network Error'}). Retrying in ${delayMs}ms...`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error("Network request failed after retries");
+};
+
 export const analyzeClips = async (files: File[], prompt: string, mood?: string, language?: string) => {
   const formData = new FormData();
   files.forEach(file => formData.append('files', file));
@@ -17,7 +31,7 @@ export const analyzeClips = async (files: File[], prompt: string, mood?: string,
   if (language) formData.append('language', language);
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/analyze`, {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/analyze`, {
       method: 'POST',
       body: formData,
     });
@@ -48,7 +62,7 @@ export const renderVideo = async (
   if (songArtist) formData.append('songArtist', songArtist);
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/process`, {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/process`, {
       method: 'POST',
       body: formData,
     });
@@ -65,7 +79,7 @@ export const renderVideo = async (
 
 export const reviseStoryboard = async (projectId: string, instruction: string) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/reedit`, {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/reedit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projectId, instruction })
@@ -73,28 +87,27 @@ export const reviseStoryboard = async (projectId: string, instruction: string) =
     if (!response.ok) throw new Error('Storyboard revision failed');
     return await response.json();
   } catch (error) {
-    console.error("API Re-edit Error:", error);
+    console.error("API Reedit Error:", error);
     throw error;
   }
 };
 
 export const getKeysStatus = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/keys/status`);
-    if (!response.ok) throw new Error('Failed to fetch API keys status');
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/keys/status`, { method: 'GET' }, 1, 1000);
+    if (!response.ok) throw new Error('Status check failed');
     return await response.json();
   } catch (error) {
-    console.error("API status check error:", error);
     return { gemini: 'error', elevenlabs: 'error' };
   }
 };
 
 export const getTrends = async () => {
-  return {
-    trends: [
-      { type: 'style', name: 'Cyberpunk transitions', score: 98 },
-      { type: 'music', name: 'Synthwave beats', score: 95 },
-      { type: 'timing', name: 'Best time to post: 6:00 PM', score: 90 }
-    ]
-  };
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/trends`, { method: 'GET' }, 1, 1000);
+    if (!response.ok) throw new Error('Trends fetch failed');
+    return await response.json();
+  } catch (error) {
+    return { status: 'fallback', timestamp: new Date().toISOString(), trendingStyles: [] };
+  }
 };
