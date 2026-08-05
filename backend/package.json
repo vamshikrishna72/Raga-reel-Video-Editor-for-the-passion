@@ -4,8 +4,8 @@
   "description": "RaagaReel AI Director Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node --max-old-space-size=384 server.js",
+    "dev": "node --max-old-space-size=384 server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

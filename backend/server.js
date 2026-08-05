@@ -707,9 +707,10 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   const outputFileName = `output-${projectId}-${renderProxies ? 'preview' : 'export'}.mp4`;
   const outputPath = path.join(outputDir, outputFileName);
 
-  // Target canvas resolution (1080x1920 9:16 vertical standard for exports, 360x640 for proxies)
-  const canvasW = renderProxies ? 360 : 1080;
-  const canvasH = renderProxies ? 640 : 1920;
+  // Target canvas resolution (720x1280 9:16 vertical standard on cloud to fit <384MB RAM, 1080x1920 for local)
+  const isCloudEnv = !!process.env.RENDER || !!process.env.PORT;
+  const canvasW = renderProxies ? 360 : (isCloudEnv ? 720 : 1080);
+  const canvasH = renderProxies ? 640 : (isCloudEnv ? 1280 : 1920);
 
   // FFmpeg Filter Graph
   let filterComplex = '';
