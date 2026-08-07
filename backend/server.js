@@ -550,6 +550,39 @@ app.post('/api/reedit', async (req, res) => {
   }
 });
 
+// Production Quality Control & Media Validation Engine
+function runQualityCheck(outputFilePath, expectedDuration) {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(outputFilePath)) {
+      return resolve({ ok: false, reason: 'Output video file does not exist on disk' });
+    }
+    const stat = fs.statSync(outputFilePath);
+    if (stat.size < 50000) {
+      return resolve({ ok: false, reason: 'Output video file size is abnormally small or corrupted' });
+    }
+
+    ffmpeg.ffprobe(outputFilePath, (err, metadata) => {
+      if (err || !metadata || !metadata.format) {
+        return resolve({ ok: false, reason: 'FFprobe container inspection failed' });
+      }
+
+      const duration = parseFloat(metadata.format.duration) || 0;
+      const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+
+      if (!videoStream) {
+        return resolve({ ok: false, reason: 'Media export is missing a valid video stream' });
+      }
+
+      resolve({
+        ok: true,
+        duration: duration.toFixed(2),
+        sizeKb: Math.round(stat.size / 1024),
+        resolution: `${videoStream.width}x${videoStream.height}`
+      });
+    });
+  });
+}
+
 // Rendering Engine (Combines clips, transitions, beat-sync BGM, dynamically ducks, and exports)
 app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), async (req, res) => {
   const { projectId, useProxy, previewUrl, songTitle, songArtist } = req.body;
@@ -882,7 +915,6 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
 
   // Execute FFmpeg with high-performance bitrate and streaming options
   const startTimer = Date.now();
-  const isCloudEnv = !!process.env.RENDER || !!process.env.PORT || renderProxies;
   command
     .complexFilter(filterComplex, [videoOutputTag, 'outa'])
     .outputOptions('-c:v libx264')
