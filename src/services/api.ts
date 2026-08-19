@@ -9,18 +9,18 @@ export const pingBackend = async () => {
   }
 };
 
-const fetchWithRetry = async (url: string, options: RequestInit, retries: number = 2, delayMs: number = 2500): Promise<Response> => {
+const fetchWithRetry = async (url: string, options: RequestInit, retries: number = 3, delayMs: number = 3000): Promise<Response> => {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, options);
       return res;
     } catch (err: any) {
       if (attempt === retries) throw err;
-      console.warn(`Fetch attempt ${attempt + 1} failed (${err?.message || 'Network Error'}). Retrying in ${delayMs}ms...`);
+      console.warn(`[Network Retry] Attempt ${attempt + 1} to ${url} failed (${err?.message || 'Server waking up'}). Retrying in ${delayMs}ms...`);
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
-  throw new Error("Network request failed after retries");
+  throw new Error("Backend connection timed out while waking up. Please retry in a moment.");
 };
 
 export const analyzeClips = async (files: File[], prompt: string, mood?: string, language?: string) => {

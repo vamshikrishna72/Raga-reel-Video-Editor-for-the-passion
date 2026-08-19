@@ -229,6 +229,19 @@ function calculateBeats(bpm, duration = 30) {
   return beats;
 }
 
+// Safe JSON parser to strip markdown wrappers or text prefix/suffix
+function parseJsonSafe(text) {
+  if (!text) return null;
+  let cleaned = String(text).trim();
+  cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '');
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+  return JSON.parse(cleaned);
+}
+
 // Multi-phase Gemini Creative Director Plan generator
 async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
   const promptLower = (prompt || '').toLowerCase();
@@ -259,14 +272,10 @@ async function queryGeminiStoryPlan(prompt, mood, language, analyzedClips) {
   const rawKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
   if (!rawKey) return defaultPlan;
 
-  try {
-    const genAI = new GoogleGenerativeAI(rawKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: { responseMimeType: "application/json" }
-    });
+  const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+  const genAI = new GoogleGenerativeAI(rawKey);
 
-    const systemInstruction = `
+  const systemInstruction = `
 You are RaagaReel's Lead AI Creative Director & Master Film Editor.
 You do NOT perform naive sequential clip editing or apply arbitrary templates.
 You edit like a human film editor: with storytelling intent, emotional pacing, shot scoring, and intentional cuts.
@@ -312,29 +321,36 @@ Return a JSON object with this exact structure:
 }
 `;
 
-    const requestPrompt = `User Prompt: "${prompt}"\nDesired Mood: "${mood}"\nDesired Language: "${language}"\n\nUploaded Clips Metadata & Frame Analysis:\n${JSON.stringify(analyzedClips, null, 2)}`;
+  const requestPrompt = `User Prompt: "${prompt}"\nDesired Mood: "${mood}"\nDesired Language: "${language}"\n\nUploaded Clips Metadata & Frame Analysis:\n${JSON.stringify(analyzedClips, null, 2)}`;
 
-    const result = await model.generateContent([systemInstruction, requestPrompt]);
-    const planText = result.response.text();
-    return JSON.parse(planText);
-  } catch (err) {
-    console.error('Failed to get Gemini plan, returning default:', err);
-    return defaultPlan;
+  for (const modelName of candidateModels) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: { responseMimeType: "application/json", temperature: 0.35 }
+      });
+      const result = await model.generateContent([systemInstruction, requestPrompt]);
+      const parsed = parseJsonSafe(result.response.text());
+      if (parsed && Array.isArray(parsed.storyboard) && parsed.storyboard.length > 0) {
+        return parsed;
+      }
+    } catch (err) {
+      console.warn(`Model ${modelName} attempt failed (${err.message}). Trying fallback...`);
+    }
   }
+
+  return defaultPlan;
 }
 
 // Conversational Revision Parser
 async function queryGeminiRevision(instruction, currentStoryboard, analyzedClips) {
-  if (!process.env.GEMINI_API_KEY) return currentStoryboard;
+  const rawKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!rawKey) return currentStoryboard;
 
-  try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: { responseMimeType: "application/json" }
-    });
+  const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+  const genAI = new GoogleGenerativeAI(rawKey);
 
-    const promptText = `
+  const promptText = `
 You are RaagaReel's AI Film Editor. You are given a current storyboard plan, metadata of available uploaded clips, and a user revision instruction.
 Update the storyboard, pacing, transitions, text overlays, or music recommendation based on the user's natural language request.
 
@@ -349,12 +365,23 @@ ${JSON.stringify(analyzedClips, null, 2)}
 Return a complete updated JSON plan matching the same format structure.
 `;
 
-    const result = await model.generateContent(promptText);
-    return JSON.parse(result.response.text());
-  } catch (err) {
-    console.error('Failed to get Gemini revision plan:', err);
-    return currentStoryboard;
+  for (const modelName of candidateModels) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: { responseMimeType: "application/json", temperature: 0.3 }
+      });
+      const result = await model.generateContent(promptText);
+      const parsed = parseJsonSafe(result.response.text());
+      if (parsed && Array.isArray(parsed.storyboard)) {
+        return parsed;
+      }
+    } catch (err) {
+      console.warn(`Revision model ${modelName} attempt failed (${err.message}). Trying fallback...`);
+    }
   }
+
+  return currentStoryboard;
 }
 
 // Quality Control Verification Check
