@@ -4,26 +4,35 @@
   --color-background: #06040a;
   --color-surface: #120e1e;
   --color-primary: #8b5cf6;
+  --color-primary-hover: #7c3aed;
   --color-secondary: #3b82f6;
   --color-accent: #ec4899;
+  --color-accent-hover: #db2777;
   --color-neon-gold: #f59e0b;
   --color-neon-green: #10b981;
-  --font-sans: 'Outfit', 'Inter', sans-serif;
+  --font-sans: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 @layer base {
+  * {
+    scroll-behavior: smooth;
+  }
   body {
-    @apply bg-background text-white font-sans antialiased overflow-x-hidden;
+    @apply bg-background text-white font-sans antialiased overflow-x-hidden selection:bg-primary/30 selection:text-white;
   }
 }
 
 @layer utilities {
   .glass-panel {
-    @apply bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_0_rgba(0,0,0,0.37)];
+    @apply bg-white/[0.03] backdrop-blur-2xl border border-white/[0.08] shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] transition-all duration-300;
+  }
+
+  .glass-panel:hover {
+    @apply border-white/[0.14] shadow-[0_12px_40px_0_rgba(139,92,246,0.15)];
   }
 
   .glass-panel-heavy {
-    @apply bg-[#120e1e]/80 backdrop-blur-3xl border border-white/[0.12] shadow-[0_12px_40px_0_rgba(0,0,0,0.5)];
+    @apply bg-[#120e1e]/85 backdrop-blur-3xl border border-white/[0.12] shadow-[0_12px_40px_0_rgba(0,0,0,0.5)];
   }
 
   .text-gradient {
@@ -35,41 +44,67 @@
   }
 
   .glow-btn-primary {
-    @apply relative overflow-hidden transition-all duration-300 shadow-[0_0_20px_rgba(139,92,246,0.3)] hover:shadow-[0_0_35px_rgba(139,92,246,0.6)] hover:scale-[1.02] active:scale-[0.98];
+    @apply relative overflow-hidden transition-all duration-300 bg-gradient-to-r from-primary to-accent text-white font-black shadow-[0_0_20px_rgba(139,92,246,0.3)] hover:shadow-[0_0_35px_rgba(139,92,246,0.6)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer;
   }
 
   .glow-btn-accent {
-    @apply relative overflow-hidden transition-all duration-300 shadow-[0_0_20px_rgba(236,72,153,0.3)] hover:shadow-[0_0_35px_rgba(236,72,153,0.6)] hover:scale-[1.02] active:scale-[0.98];
+    @apply relative overflow-hidden transition-all duration-300 bg-gradient-to-r from-accent to-pink-600 text-white font-black shadow-[0_0_20px_rgba(236,72,153,0.3)] hover:shadow-[0_0_35px_rgba(236,72,153,0.6)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer;
   }
 
   .glow-panel-primary {
-    @apply border border-primary/30 shadow-[0_0_15px_rgba(139,92,246,0.1)];
+    @apply border border-primary/30 shadow-[0_0_20px_rgba(139,92,246,0.15)];
   }
 
   .glow-panel-accent {
-    @apply border border-accent/30 shadow-[0_0_15px_rgba(236,72,153,0.1)];
+    @apply border border-accent/30 shadow-[0_0_20px_rgba(236,72,153,0.15)];
   }
 
   .glow-text-primary {
-    @apply drop-shadow-[0_0_8px_rgba(139,92,246,0.5)];
+    @apply drop-shadow-[0_0_12px_rgba(139,92,246,0.6)];
   }
 
-  /* Hide scrollbar for Chrome, Safari and Opera */
+  /* Custom Slick Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.3);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.6);
+  }
+
+  /* Hide scrollbar for clean UI view */
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
-  /* Hide scrollbar for IE, Edge and Firefox */
   .no-scrollbar {
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 
-/* Standard animation helpers */
+/* Keyframe Micro-Animations */
 @keyframes float {
   0% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(-10px) rotate(3deg); }
+  50% { transform: translateY(-8px) rotate(2deg); }
   100% { transform: translateY(0px) rotate(0deg); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 .animate-float-slow {
@@ -78,4 +113,12 @@
 
 .animate-float-medium {
   animation: float 4s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  animation: shimmer 2.5s infinite;
 }
