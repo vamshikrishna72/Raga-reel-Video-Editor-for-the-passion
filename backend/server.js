@@ -172,18 +172,27 @@ function getProbeMetadata(filePath) {
   });
 }
 
-// Cloud-optimized lightweight video proxy creator
+// Cloud-optimized lightweight video proxy creator with integrity verification
 function createProxyVideo(inputPath, outputPath, hasAudio = true) {
   return new Promise((resolve) => {
+    if (fs.existsSync(outputPath)) {
+      try { fs.unlinkSync(outputPath); } catch (e) {}
+    }
+
     let cmd = ffmpeg(inputPath)
-      .size('540x960')
-      .aspect('9:16')
-      .autopad(true)
+      .videoFilters([
+        "scale=540:960:force_original_aspect_ratio=decrease",
+        "pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black"
+      ])
       .videoCodec('libx264')
-      .outputOptions('-preset ultrafast')
-      .outputOptions('-crf 24')
-      .outputOptions('-threads 2')
-      .outputOptions('-y');
+      .outputOptions([
+        '-preset ultrafast',
+        '-crf 24',
+        '-pix_fmt yuv420p',
+        '-movflags +faststart',
+        '-threads 2',
+        '-y'
+      ]);
 
     if (hasAudio) {
       cmd = cmd
@@ -195,9 +204,22 @@ function createProxyVideo(inputPath, outputPath, hasAudio = true) {
     }
 
     cmd
-      .on('end', () => resolve(outputPath))
+      .on('end', () => {
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10000) {
+          resolve(outputPath);
+        } else {
+          console.warn(`Proxy file empty for ${path.basename(inputPath)}, fallback to original`);
+          if (fs.existsSync(outputPath)) {
+            try { fs.unlinkSync(outputPath); } catch (e) {}
+          }
+          resolve(inputPath);
+        }
+      })
       .on('error', (err) => {
         console.warn(`Proxy creation failed for ${path.basename(inputPath)}, fallback to original:`, err.message);
+        if (fs.existsSync(outputPath)) {
+          try { fs.unlinkSync(outputPath); } catch (e) {}
+        }
         resolve(inputPath);
       })
       .save(outputPath);
@@ -450,7 +472,7 @@ app.post('/api/analyze', upload.array('files', 10), async (req, res) => {
       // 2. Generate proxy video
       const targetProxyName = `${i}_proxy.mp4`;
       const targetProxyPath = path.join(proxiesPath, targetProxyName);
-      await createProxyVideo(targetOrigPath, targetProxyPath, metadata.hasAudio);
+      const resolvedProxyPath = await createProxyVideo(targetOrigPath, targetProxyPath, metadata.hasAudio);
 
       // 3. Extract multiple screenshots for Gemini (20%, 50%, 80%)
       const frames = [];
@@ -468,7 +490,7 @@ app.post('/api/analyze', upload.array('files', 10), async (req, res) => {
         clipIndex: i,
         fileName: origFile.originalname,
         localPath: targetOrigPath,
-        proxyPath: targetProxyPath,
+        proxyPath: resolvedProxyPath || targetOrigPath,
         metadata,
         frames
       });
@@ -746,7 +768,16 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     const clip = clips.find(c => c.clipIndex === scene.clipIndex);
     if (clip) {
       const isCloud = !!process.env.RENDER || !!process.env.PORT;
-      const filePath = (renderProxies || (isCloud && clip.proxyPath)) ? clip.proxyPath : clip.originalPath;
+      let filePath = clip.originalPath;
+      if (renderProxies || isCloud) {
+        if (clip.proxyPath && fs.existsSync(clip.proxyPath)) {
+          try {
+            if (fs.statSync(clip.proxyPath).size > 10000) {
+              filePath = clip.proxyPath;
+            }
+          } catch (e) {}
+        }
+      }
       orderedFiles.push({
         path: filePath,
         startTime: scene.startTime || 0,
