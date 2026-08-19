@@ -172,24 +172,24 @@ function getProbeMetadata(filePath) {
   });
 }
 
-// Low-resolution proxy creator with audio presence check
+// Cloud-optimized lightweight video proxy creator
 function createProxyVideo(inputPath, outputPath, hasAudio = true) {
   return new Promise((resolve) => {
     let cmd = ffmpeg(inputPath)
-      .size('360x640')
+      .size('540x960')
       .aspect('9:16')
       .autopad(true)
       .videoCodec('libx264')
-      .outputOptions('-preset superfast')
-      .outputOptions('-crf 30')
+      .outputOptions('-preset ultrafast')
+      .outputOptions('-crf 24')
       .outputOptions('-threads 2')
-      .outputOptions('-y'); // Force overwrite
+      .outputOptions('-y');
 
     if (hasAudio) {
       cmd = cmd
         .audioCodec('aac')
-        .audioFrequency(22050)
-        .audioChannels(1);
+        .audioFrequency(44100)
+        .audioChannels(2);
     } else {
       cmd = cmd.noAudio();
     }
@@ -745,7 +745,8 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   activeStoryboard.forEach((scene) => {
     const clip = clips.find(c => c.clipIndex === scene.clipIndex);
     if (clip) {
-      const filePath = renderProxies ? clip.proxyPath : clip.originalPath;
+      const isCloud = !!process.env.RENDER || !!process.env.PORT;
+      const filePath = (renderProxies || (isCloud && clip.proxyPath)) ? clip.proxyPath : clip.originalPath;
       orderedFiles.push({
         path: filePath,
         startTime: scene.startTime || 0,
