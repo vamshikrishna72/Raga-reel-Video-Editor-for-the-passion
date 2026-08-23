@@ -564,9 +564,8 @@ async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language
     jobQueue.updateJob(jobId, { status: 'EDITING', progress: 80, currentStage: 'EDITING', stageMessage: 'Applying color grading presets and transition graphs...' });
     jobQueue.updateJob(jobId, { status: 'RENDERING', progress: 90, currentStage: 'RENDERING', stageMessage: 'Encoding vertical MP4 reel via FFmpeg...' });
 
-    const host = req ? req.get('host') : 'localhost:3001';
-    const protocol = req && (req.protocol === 'https' || req.get('x-forwarded-proto') === 'https') ? 'https' : 'http';
-    const baseUrl = `${protocol}://${host}`;
+    // Execute real FFmpeg video rendering pipeline
+    const renderRes = await renderProjectPipeline(projectId, {}, req);
 
     jobQueue.updateJob(jobId, { status: 'QUALITY_CHECK', progress: 95, currentStage: 'QUALITY_CHECK', stageMessage: 'Validating output streams and media integrity...' });
 
@@ -577,16 +576,11 @@ async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language
       stageMessage: 'Reel generated successfully!',
       result: {
         projectId,
-        videoUrl: `${baseUrl}/outputs/output-${projectId}-export.mp4`,
-        caption: aiPlan.caption || `Created with RaagaReel AI - ${prompt}`,
-        hook: aiPlan.text_overlays?.[0]?.text || 'Wait for it... 👀',
+        videoUrl: renderRes.videoUrl,
+        caption: renderRes.caption || aiPlan.caption || `Created with RaagaReel AI - ${prompt}`,
+        hook: renderRes.hook || aiPlan.text_overlays?.[0]?.text || 'Wait for it... 👀',
         storyboard: aiPlan.storyboard,
-        debug: {
-          prompt,
-          theme: aiPlan.theme,
-          colorGrading: aiPlan.color_grading,
-          clipsCount: analyzedClips.length
-        }
+        debug: renderRes.debug
       }
     });
 
@@ -753,20 +747,24 @@ app.post('/api/reedit', async (req, res) => {
       projectMetadata.clips
     );
 
-    // Update metadata and save
-    projectMetadata.aiPlan = updatedPlan;
-    fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
+    // Execute FFmpeg render for revised storyboard
+    const renderRes = await renderProjectPipeline(projectId, { useProxy: true }, req);
 
     res.json({
+      status: 'success',
       projectId,
+      videoUrl: renderRes.videoUrl,
       storyboard: updatedPlan.storyboard,
       textOverlays: updatedPlan.text_overlays,
       colorGrading: updatedPlan.color_grading,
-      musicRecommendation: updatedPlan.music_recommendation
+      musicRecommendation: updatedPlan.music_recommendation,
+      caption: renderRes.caption,
+      hook: renderRes.hook,
+      debug: renderRes.debug
     });
   } catch (err) {
     console.error('Revision failed:', err);
-    res.status(500).json({ error: 'Conversational edit failed' });
+    res.status(500).json({ error: `Conversational edit failed: ${err.message}` });
   }
 });
 

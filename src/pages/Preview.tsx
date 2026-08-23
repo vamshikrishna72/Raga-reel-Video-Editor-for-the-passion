@@ -81,23 +81,32 @@ const Preview = () => {
     setIsRevising(true);
     try {
       const revRes = await reviseStoryboard(projectId, revisionInput);
-      const renderRes = await renderVideo(
-        projectId, 
-        revRes.storyboard, 
-        song?.previewUrl, 
-        undefined,
-        true,
-        song?.title,
-        song?.artist
-      );
-
-      setVideoUrl(renderRes.videoUrl);
-      setCaption(renderRes.caption || caption);
-      setHook(renderRes.hook || hook);
-      setDebugData(renderRes.debug || debugData);
-      setRevisionInput("");
-      triggerToast("Revision applied by AI Co-Director!");
+      if (revRes && revRes.videoUrl) {
+        setVideoUrl(revRes.videoUrl);
+        setCaption(revRes.caption || caption);
+        setHook(revRes.hook || hook);
+        if (revRes.debug) setDebugData(revRes.debug);
+        setRevisionInput("");
+        triggerToast("Revision applied by AI Co-Director!");
+      } else {
+        const renderRes = await renderVideo(
+          projectId, 
+          revRes.storyboard, 
+          song?.previewUrl, 
+          undefined,
+          true,
+          song?.title,
+          song?.artist
+        );
+        setVideoUrl(renderRes.videoUrl);
+        setCaption(renderRes.caption || caption);
+        setHook(renderRes.hook || hook);
+        if (renderRes.debug) setDebugData(renderRes.debug);
+        setRevisionInput("");
+        triggerToast("Revision applied by AI Co-Director!");
+      }
     } catch (err: any) {
+      console.error("Revision request error:", err);
       triggerToast("Revision could not be applied. Check backend status.");
     } finally {
       setIsRevising(false);
