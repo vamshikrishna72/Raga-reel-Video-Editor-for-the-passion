@@ -801,136 +801,51 @@ function runQualityCheck(outputFilePath, expectedDuration) {
   });
 }
 
-// Rendering Engine (Combines clips, transitions, beat-sync BGM, dynamically ducks, and exports)
-app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), async (req, res) => {
-  const { projectId, useProxy, previewUrl, songTitle, songArtist } = req.body;
-  const customAudio = req.files && req.files['customAudio'] ? req.files['customAudio'][0] : null;
-
-  if (!projectId) {
-    return res.status(400).json({ error: 'Missing projectId' });
+// Helper function to resolve public URL for output video
+function getPublicVideoUrl(outputFileName, req) {
+  const isCloud = !!process.env.RENDER || !!process.env.PORT;
+  if (isCloud) {
+    return `https://raga-reel-video-editor-for-the-passion.onrender.com/outputs/${outputFileName}`;
   }
+  const host = req ? (req.get('host') || 'localhost:3001') : 'localhost:3001';
+  const protocol = req && (req.protocol === 'https' || req.get('x-forwarded-proto') === 'https') ? 'https' : 'http';
+  return `${protocol}://${host}/outputs/${outputFileName}`;
+}
 
+// Unified FFmpeg Rendering Pipeline Engine
+async function renderProjectPipeline(projectId, options = {}, req = null) {
   const projectPath = path.join(projectsDir, projectId);
   const metadataPath = path.join(projectPath, 'metadata.json');
 
   if (!fs.existsSync(metadataPath)) {
-    return res.status(404).json({ error: 'Project not found' });
+    throw new Error(`Project ${projectId} metadata not found`);
   }
 
   const projectMetadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
   const aiPlan = projectMetadata.aiPlan;
   const clips = projectMetadata.clips;
+  const useProxy = options.useProxy === true || options.useProxy === 'true';
 
-  const renderProxies = useProxy === 'true' || useProxy === true;
-  console.log(`Rendering project ${projectId} (Proxy mode: ${renderProxies})...`);
-
-  // Handle re-ordered custom storyboard sequence if passed, otherwise use AI Plan
   let activeStoryboard = aiPlan.storyboard;
-  if (req.body.storyboard) {
-    try {
-      activeStoryboard = JSON.parse(req.body.storyboard);
-      // Save it back to project metadata
-      projectMetadata.aiPlan.storyboard = activeStoryboard;
-      fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
-    } catch (e) {
-      console.warn('Failed to parse storyboard override, using default.');
-    }
+  if (options.storyboard) {
+    activeStoryboard = options.storyboard;
+    projectMetadata.aiPlan.storyboard = activeStoryboard;
+    fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
   }
 
-  // Resolve music path
   let musicPath = path.join(__dirname, 'music', `${aiPlan.music_recommendation.mood.toLowerCase()}_hype.wav`);
   const localMoodFile = path.join(__dirname, 'music', `english_${aiPlan.music_recommendation.mood.toLowerCase()}.wav`);
   if (fs.existsSync(localMoodFile)) {
     musicPath = localMoodFile;
   }
 
-  let resolvedPreviewUrl = previewUrl;
-  
-  // Resolve missing previewUrls in backend by searching iTunes on-the-fly
-  if ((!resolvedPreviewUrl || resolvedPreviewUrl === 'undefined' || resolvedPreviewUrl === 'null') && songTitle) {
-    console.log(`Backend resolving preview URL for catalog song: '${songTitle}' - '${songArtist}'`);
-    try {
-      const primaryArtist = songArtist ? songArtist.split(',')[0].trim() : '';
-      let term = `${songTitle} ${primaryArtist}`.trim();
-      let searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
-      let searchData = await searchRes.json();
-      
-      if (!searchData.results || !searchData.results[0]?.previewUrl) {
-        term = songTitle;
-        searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
-        searchData = await searchRes.json();
-      }
-
-      if (searchData.results && searchData.results[0]?.previewUrl) {
-        resolvedPreviewUrl = searchData.results[0].previewUrl;
-        console.log(`Successfully resolved preview URL for '${songTitle}': ${resolvedPreviewUrl}`);
-      } else {
-        console.warn(`Could not resolve preview URL for song '${songTitle}'`);
-      }
-    } catch (err) {
-      console.warn('iTunes search failed in backend:', err.message);
-    }
-  }
-
-  if (customAudio) {
-    musicPath = customAudio.path;
-    console.log(`Using custom user uploaded audio: ${musicPath}`);
-  } else if (resolvedPreviewUrl && resolvedPreviewUrl !== 'undefined' && resolvedPreviewUrl !== 'null') {
-    const songCacheName = 'preview-' + resolvedPreviewUrl.replace(/[^a-zA-Z0-9]/g, '_').slice(-60) + '.m4a';
-    const cachedSongPath = path.join(__dirname, 'music', songCacheName);
-    
-    if (fs.existsSync(cachedSongPath)) {
-      musicPath = cachedSongPath;
-      console.log(`Using cached soundtrack: ${musicPath}`);
-    } else {
-      try {
-        console.log(`Downloading soundtrack preview from ${resolvedPreviewUrl}...`);
-        await downloadFile(resolvedPreviewUrl, cachedSongPath);
-        musicPath = cachedSongPath;
-        console.log(`Downloaded and cached soundtrack: ${musicPath}`);
-      } catch (err) {
-        console.error('Failed to download custom soundtrack preview:', err);
-      }
-    }
-  }
-
-  // Generate ElevenLabs Voiceover if required
   let voiceoverPath = null;
   const voicePrompt = aiPlan.text_overlays?.find(o => o.style === 'hook')?.text || aiPlan.hook;
-  if (process.env.ELEVENLABS_API_KEY && voicePrompt && !renderProxies) {
-    try {
-      const voiceId = 'pNInz6obpgDQGcFmaJgB'; // Adam Voice
-      const resTTS = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': process.env.ELEVENLABS_API_KEY
-        },
-        body: JSON.stringify({
-          text: voicePrompt,
-          model_id: 'eleven_multilingual_v2',
-          voice_settings: { stability: 0.75, similarity_boost: 0.75 }
-        })
-      });
 
-      if (resTTS.ok) {
-        const arrayBuffer = await resTTS.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        voiceoverPath = path.join(projectPath, `voiceover-${Date.now()}.mp3`);
-        fs.writeFileSync(voiceoverPath, buffer);
-      }
-    } catch (err) {
-      console.error('Failed to generate ElevenLabs voiceover:', err);
-    }
-  }
-
-  // Parse beat timestamps
   const bpm = aiPlan.music_recommendation.bpm || 120;
   const beats = calculateBeats(bpm, 60);
 
-  // Compute sequences & speaking ranges
   const orderedFiles = [];
-  const speechIntervals = [];
   let currentTimelineCursor = 0;
 
   activeStoryboard.forEach((scene) => {
@@ -938,7 +853,7 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     if (clip) {
       const isCloud = !!process.env.RENDER || !!process.env.PORT;
       let filePath = clip.originalPath;
-      if (renderProxies || isCloud) {
+      if (useProxy || isCloud) {
         if (clip.proxyPath && fs.existsSync(clip.proxyPath)) {
           try {
             if (fs.statSync(clip.proxyPath).size > 10000) {
@@ -954,64 +869,33 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
         transition: scene.transition || 'cuts',
         hasAudio: clip.metadata.hasAudio
       });
-
-      // Track speech range if the source clip has an audio track
-      if (clip.metadata.hasAudio) {
-        speechIntervals.push({
-          start: currentTimelineCursor,
-          end: currentTimelineCursor + (scene.duration || 3.0)
-        });
-      }
       currentTimelineCursor += (scene.duration || 3.0);
     }
-  });  const totalDuration = currentTimelineCursor;
-  const outputFileName = `output-${projectId}-${renderProxies ? 'preview' : 'export'}.mp4`;
+  });
+
+  const totalDuration = currentTimelineCursor;
+  const outputFileName = `output-${projectId}-${useProxy ? 'preview' : 'export'}.mp4`;
   const outputPath = path.join(outputDir, outputFileName);
 
-  // Target canvas resolution (720x1280 9:16 vertical standard on cloud to fit <384MB RAM, 1080x1920 for local)
   const isCloudEnv = !!process.env.RENDER || !!process.env.PORT;
-  const canvasW = renderProxies ? 360 : (isCloudEnv ? 720 : 1080);
-  const canvasH = renderProxies ? 640 : (isCloudEnv ? 1280 : 1920);
+  const canvasW = useProxy ? 360 : (isCloudEnv ? 720 : 1080);
+  const canvasH = useProxy ? 640 : (isCloudEnv ? 1280 : 1920);
 
-  // FFmpeg Filter Graph
   let filterComplex = '';
-  
-  // Color Correction presets
   let colorFilter = '';
   switch (aiPlan.color_grading?.toLowerCase()) {
-    case 'vivid':
-      colorFilter = ',eq=contrast=1.22:saturation=1.38:brightness=0.01';
-      break;
-    case 'warm':
-      colorFilter = ',colorbalance=rs=0.1:gs=0.04:bs=-0.06,eq=contrast=1.05:saturation=1.12';
-      break;
-    case 'gritty':
-      colorFilter = ',eq=contrast=1.35:saturation=0.75:brightness=-0.02';
-      break;
-    case 'dreamy':
-      colorFilter = ',eq=brightness=0.04:contrast=1.08:saturation=1.15,colorbalance=rs=0.04:gs=0.02:bs=0.05';
-      break;
-    case 'luxury':
-      colorFilter = ',eq=contrast=1.25:saturation=1.05:brightness=-0.01';
-      break;
-    case 'pop':
-      colorFilter = ',eq=contrast=1.15:saturation=1.45';
-      break;
-    case 'cyberpunk':
-      colorFilter = ',colorbalance=rs=0.12:gs=-0.05:bs=0.15,eq=contrast=1.2:saturation=1.25';
-      break;
-    case 'vintage':
-      colorFilter = ',colorbalance=rs=0.08:gs=0.06:bs=-0.05,eq=contrast=0.95:saturation=0.85';
-      break;
-    case 'cinematic_teal_orange':
-      colorFilter = ',colorbalance=rs=0.12:gs=-0.04:bs=-0.1:rh=-0.08:gh=0.04:bh=0.14,eq=contrast=1.18:saturation=1.2';
-      break;
-    default:
-      colorFilter = ',eq=contrast=1.08:saturation=1.12';
-      break;
+    case 'vivid': colorFilter = ',eq=contrast=1.22:saturation=1.38:brightness=0.01'; break;
+    case 'warm': colorFilter = ',colorbalance=rs=0.1:gs=0.04:bs=-0.06,eq=contrast=1.05:saturation=1.12'; break;
+    case 'gritty': colorFilter = ',eq=contrast=1.35:saturation=0.75:brightness=-0.02'; break;
+    case 'dreamy': colorFilter = ',eq=brightness=0.04:contrast=1.08:saturation=1.15,colorbalance=rs=0.04:gs=0.02:bs=0.05'; break;
+    case 'luxury': colorFilter = ',eq=contrast=1.25:saturation=1.05:brightness=-0.01'; break;
+    case 'pop': colorFilter = ',eq=contrast=1.15:saturation=1.45'; break;
+    case 'cyberpunk': colorFilter = ',colorbalance=rs=0.12:gs=-0.05:bs=0.15,eq=contrast=1.2:saturation=1.25'; break;
+    case 'vintage': colorFilter = ',colorbalance=rs=0.08:gs=0.06:bs=-0.05,eq=contrast=0.95:saturation=0.85'; break;
+    case 'cinematic_teal_orange': colorFilter = ',colorbalance=rs=0.12:gs=-0.04:bs=-0.1:rh=-0.08:gh=0.04:bh=0.14,eq=contrast=1.18:saturation=1.2'; break;
+    default: colorFilter = ',eq=contrast=1.08:saturation=1.12'; break;
   }
 
-  // Process video segments with Smart Background Blur & Human Director Transitions
   orderedFiles.forEach((file, index) => {
     const dur = file.duration;
     const trans = file.transition;
@@ -1022,31 +906,20 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
       zoomFilter = `,zoompan=z='min(zoom+0.002,1.3)':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d=1:s=${canvasW}x${canvasH}`;
     }
 
-    if (trans === 'fade') {
-      transFilter = `,fade=t=in:st=0:d=0.35,fade=t=out:st=${(dur - 0.35).toFixed(2)}:d=0.35`;
-    } else if (trans === 'flash') {
-      transFilter = `,fade=t=in:st=0:d=0.25:color=white,fade=t=out:st=${(dur - 0.25).toFixed(2)}:d=0.25:color=white`;
-    } else if (trans === 'blur') {
-      transFilter = `,boxblur=14:enable='lt(t,0.25)+gt(t,${(dur - 0.25).toFixed(2)})'`;
-    } else if (trans === 'whip_left' || trans === 'whip_right') {
-      transFilter = `,boxblur=22:enable='gt(t,${(dur - 0.2).toFixed(2)})'`;
-    } else if (trans === 'glitch') {
-      transFilter = `,rgbashift=rh=8:rv=-8:enable='lt(t,0.15)+gt(t,${(dur - 0.15).toFixed(2)})'`;
-    } else if (trans === 'rgb_split') {
-      transFilter = `,rgbashift=rh=10:bv=-10:enable='lt(t,0.2)+gt(t,${(dur - 0.2).toFixed(2)})'`;
-    } else if (trans === 'dip_black') {
-      transFilter = `,fade=t=in:st=0:d=0.3:color=black,fade=t=out:st=${(dur - 0.3).toFixed(2)}:d=0.3:color=black`;
-    } else if (trans === 'dip_white') {
-      transFilter = `,fade=t=in:st=0:d=0.25:color=white,fade=t=out:st=${(dur - 0.25).toFixed(2)}:d=0.25:color=white`;
-    }
+    if (trans === 'fade') transFilter = `,fade=t=in:st=0:d=0.35,fade=t=out:st=${(dur - 0.35).toFixed(2)}:d=0.35`;
+    else if (trans === 'flash') transFilter = `,fade=t=in:st=0:d=0.25:color=white,fade=t=out:st=${(dur - 0.25).toFixed(2)}:d=0.25:color=white`;
+    else if (trans === 'blur') transFilter = `,boxblur=14:enable='lt(t,0.25)+gt(t,${(dur - 0.25).toFixed(2)})'`;
+    else if (trans === 'whip_left' || trans === 'whip_right') transFilter = `,boxblur=22:enable='gt(t,${(dur - 0.2).toFixed(2)})'`;
+    else if (trans === 'glitch') transFilter = `,rgbashift=rh=8:rv=-8:enable='lt(t,0.15)+gt(t,${(dur - 0.15).toFixed(2)})'`;
+    else if (trans === 'rgb_split') transFilter = `,rgbashift=rh=10:bv=-10:enable='lt(t,0.2)+gt(t,${(dur - 0.2).toFixed(2)})'`;
+    else if (trans === 'dip_black') transFilter = `,fade=t=in:st=0:d=0.3:color=black,fade=t=out:st=${(dur - 0.3).toFixed(2)}:d=0.3:color=black`;
+    else if (trans === 'dip_white') transFilter = `,fade=t=in:st=0:d=0.25:color=white,fade=t=out:st=${(dur - 0.25).toFixed(2)}:d=0.25:color=white`;
 
-    // Smart Background Blur Fill: Scales background to fill canvas and blurs, while overlaying sharp foreground
     filterComplex += `[${index}:v]split=2[bgin_${index}][fgin_${index}]; `;
     filterComplex += `[bgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},boxblur=16:2,eq=brightness=-0.18:contrast=0.9[bg_${index}]; `;
     filterComplex += `[fgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease[fg_${index}]; `;
     filterComplex += `[bg_${index}][fg_${index}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p${colorFilter}${zoomFilter}${transFilter}[v${index}]; `;
 
-    // Format audio
     if (file.hasAudio) {
       filterComplex += `[${index}:a]aresample=44100,aformat=channel_layouts=stereo[a${index}]; `;
     } else {
@@ -1054,7 +927,6 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
     }
   });
 
-  // Concatenate Video & Audio Streams
   let concatVideo = '';
   let concatAudio = '';
   for (let i = 0; i < orderedFiles.length; i++) {
@@ -1064,12 +936,10 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
   filterComplex += `${concatVideo}concat=n=${orderedFiles.length}:v=1:a=0[rawv]; `;
   filterComplex += `${concatAudio}concat=n=${orderedFiles.length}:v=0:a=1[rawa]; `;
 
-  // Strict text overlay enforcement: check if user prompt explicitly requested text
   const promptLower = (projectMetadata.prompt || '').toLowerCase();
   const textKeywords = ['text', 'caption', 'subtitles', 'subtitle', 'title', 'hook', 'words', 'quote', 'overlay', 'written'];
   const userRequestedText = textKeywords.some(kw => promptLower.includes(kw));
 
-  // Draw Styled Text Overlays ONLY if explicitly requested in prompt
   let videoOutputTag = 'rawv';
   if (userRequestedText && aiPlan.text_overlays && aiPlan.text_overlays.length > 0) {
     let currentVTag = 'rawv';
@@ -1077,149 +947,98 @@ app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), 
       const nextVTag = `textv${idx}`;
       const isHook = overlay.style === 'hook';
       const fontcolor = isHook ? 'yellow' : 'white';
-      const size = isHook ? (renderProxies ? 32 : 54) : (renderProxies ? 22 : 38);
+      const size = isHook ? (useProxy ? 32 : 54) : (useProxy ? 22 : 38);
       const yPosition = isHook ? 'h/3.2' : 'h-240';
       const fontfileOpt = fontPath ? `:fontfile='${fontPath}'` : '';
       const boxOpt = `:box=1:boxcolor=black@0.55:boxborderw=${isHook ? 12 : 8}`;
-      
-      // Escape special characters to prevent drawtext failures
       const escapedText = overlay.text.replace(/'/g, '').replace(/"/g, '').replace(/:/g, '\\:');
-      
       filterComplex += `[${currentVTag}]drawtext=text='${escapedText}'${fontfileOpt}:fontcolor=${fontcolor}:fontsize=${size}${boxOpt}:x=(w-text_w)/2:y=${yPosition}:enable='between(t,${overlay.startTime},${overlay.endTime})'[${nextVTag}]; `;
       currentVTag = nextVTag;
     });
     videoOutputTag = `textv${aiPlan.text_overlays.length - 1}`;
   }
 
-  // Get voiceover duration
-  let voDuration = 0;
-  if (voiceoverPath) {
-    try {
-      voDuration = await new Promise((resolve) => {
-        ffmpeg.ffprobe(voiceoverPath, (err, m) => {
-          if (err) return resolve(4.0);
-          resolve(parseFloat(m.format.duration) || 4.0);
-        });
-      });
-    } catch (e) {
-      voDuration = 4.0;
-    }
-  }
-
-  // Dynamic Audio Ducking & Loudness Normalization
   const musicInputIndex = orderedFiles.length;
-  let dynamicBgmVolume = '0.85'; // Clear loud volume when no voiceover is active
-  if (voDuration > 0) {
-    dynamicBgmVolume = `if(between(t,0,${voDuration.toFixed(2)}),0.15,0.75)`;
-  }
+  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2147483647,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=0.85[bgm]; `;
+  filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
+  filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
 
-  // Seamless Audio Looping & Formatting for Selected Music Track
-  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2147483647,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
+  return new Promise((resolve, reject) => {
+    let command = ffmpeg();
+    orderedFiles.forEach(file => {
+      command = command.input(file.path)
+        .inputOptions([`-ss ${file.startTime}`, `-t ${file.duration}`]);
+    });
+    command = command.input(musicPath);
 
-  // Mix background music with voice audio & apply master loudness normalization
-  if (voiceoverPath) {
-    const voInputIndex = musicInputIndex + 1;
-    filterComplex += `[${voInputIndex}:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.8[vo]; `;
-    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
-    filterComplex += `[ambient][music][vo]amix=inputs=3:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
-  } else {
-    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
-    filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
-  }
+    const startTimer = Date.now();
+    command
+      .complexFilter(filterComplex, [videoOutputTag, 'outa'])
+      .outputOptions('-c:v libx264')
+      .outputOptions(isCloudEnv ? '-preset ultrafast' : '-preset fast')
+      .outputOptions(isCloudEnv ? '-b:v 2.5M' : '-b:v 5M')
+      .outputOptions(isCloudEnv ? '-maxrate 3.5M' : '-maxrate 7M')
+      .outputOptions(isCloudEnv ? '-bufsize 5M' : '-bufsize 10M')
+      .outputOptions('-movflags +faststart')
+      .outputOptions('-threads 2')
+      .outputOptions('-pix_fmt yuv420p')
+      .outputOptions('-c:a aac')
+      .outputOptions('-b:a 192k')
+      .outputOptions('-y')
+      .outputOptions(`-t ${totalDuration.toFixed(2)}`)
+      .on('start', (cmd) => {
+        console.log('Rendering FFmpeg command:', cmd);
+      })
+      .on('end', async () => {
+        const renderTime = Date.now() - startTimer;
+        console.log(`Render complete in ${renderTime}ms.`);
 
-  // Run FFmpeg Command
-  let command = ffmpeg();
-  orderedFiles.forEach(file => {
-    command = command.input(file.path)
-      .inputOptions([
-        `-ss ${file.startTime}`,
-        `-t ${file.duration}`
-      ]);
+        const qcResult = await runQualityCheck(outputPath, totalDuration);
+        if (!qcResult.ok) {
+          return reject(new Error(`Video Quality Control check failed: ${qcResult.reason}`));
+        }
+
+        const videoUrl = getPublicVideoUrl(outputFileName, req);
+        resolve({
+          videoUrl,
+          caption: aiPlan.caption || `Created with RaagaReel AI - ${projectMetadata.prompt}`,
+          hook: voicePrompt || 'Wait for it... 👀',
+          debug: {
+            prompt: projectMetadata.prompt,
+            theme: aiPlan.theme,
+            colorGrading: aiPlan.color_grading,
+            renderTimeMs: renderTime,
+            qualityControl: 'PASSED'
+          }
+        });
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg Render Error:', err.message);
+        reject(new Error(`Video rendering failed: ${err.message}`));
+      })
+      .save(outputPath);
   });
-  command = command.input(musicPath);
-  if (voiceoverPath) {
-    command = command.input(voiceoverPath);
+}
+
+// Rendering Engine (Combines clips, transitions, beat-sync BGM, dynamically ducks, and exports)
+app.post('/api/process', upload.fields([{ name: 'customAudio', maxCount: 1 }]), async (req, res) => {
+  const { projectId, useProxy } = req.body;
+  if (!projectId) {
+    return res.status(400).json({ error: 'Missing projectId' });
   }
-
-  // Execute FFmpeg with high-performance bitrate and streaming options
-  const startTimer = Date.now();
-  command
-    .complexFilter(filterComplex, [videoOutputTag, 'outa'])
-    .outputOptions('-c:v libx264')
-    .outputOptions(isCloudEnv ? '-preset ultrafast' : '-preset fast')
-    .outputOptions(isCloudEnv ? '-b:v 2.5M' : '-b:v 5M')
-    .outputOptions(isCloudEnv ? '-maxrate 3.5M' : '-maxrate 7M')
-    .outputOptions(isCloudEnv ? '-bufsize 5M' : '-bufsize 10M')
-    .outputOptions('-movflags +faststart')
-    .outputOptions('-threads 2')
-    .outputOptions('-pix_fmt yuv420p')
-    .outputOptions('-c:a aac')
-    .outputOptions('-b:a 192k')
-    .outputOptions('-y')
-    .outputOptions(`-t ${totalDuration.toFixed(2)}`)
-    .on('start', (cmd) => {
-      console.log('Rendering FFmpeg command:', cmd);
-    })
-    .on('end', async () => {
-      const renderTime = Date.now() - startTimer;
-      console.log(`Render complete in ${renderTime}ms.`);
-
-      // Clean up uploaded voiceover file if exists
-      if (voiceoverPath && fs.existsSync(voiceoverPath)) {
-        try { fs.unlinkSync(voiceoverPath); } catch (e) {}
-      }
-
-      // Quality Control check
-      const qcResult = await runQualityCheck(outputPath, totalDuration);
-      if (!qcResult.ok) {
-        console.error(`Quality Check failed: ${qcResult.reason}.`);
-        return res.status(500).json({ error: `Video Quality Control check failed: ${qcResult.reason}` });
-      }
-
-      // Developer Debug Panel payload
-      const debugData = {
-        promptInterpretation: {
-          prompt: projectMetadata.prompt,
-          theme: aiPlan.theme,
-          colorGrading: aiPlan.color_grading,
-          pacing: aiPlan.pacing
-        },
-        clipAnalysis: clips.map(c => ({
-          index: c.clipIndex,
-          file: c.fileName,
-          resolution: `${c.metadata.width}x${c.metadata.height}`,
-          duration: `${c.metadata.duration.toFixed(2)}s`,
-          fps: c.metadata.fps
-        })),
-        storyboard: activeStoryboard,
-        musicSelection: {
-          path: path.basename(musicPath),
-          bpm: bpm,
-          beatTimestamps: beats.slice(0, 8)
-        },
-        ffmpegCommand: `ffmpeg -i <inputs> -filter_complex "${filterComplex.slice(0, 150)}..." -c:v libx264 ${path.basename(outputPath)}`,
-        renderTimeMs: renderTime,
-        qualityControl: 'PASSED'
-      };
-
-      const host = req.get('host');
-      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-      const baseUrl = `${protocol}://${host}`;
-
-      res.json({
-        status: 'success',
-        videoUrl: `${baseUrl}/outputs/${outputFileName}`,
-        caption: aiPlan.caption || 'Created with RaagaReel AI',
-        hook: voicePrompt || 'Wait for it... 👀',
-        qualityScore: 92,
-        debug: debugData
-      });
-    })
-    .on('error', (err, stdout, stderr) => {
-      console.error('FFmpeg Render Error:', err.message);
-      res.status(500).json({ error: `Video rendering failed: ${err.message}` });
-    })
-    .save(outputPath);
+  try {
+    const renderRes = await renderProjectPipeline(projectId, { useProxy }, req);
+    res.json({
+      status: 'success',
+      videoUrl: renderRes.videoUrl,
+      caption: renderRes.caption,
+      hook: renderRes.hook,
+      qualityScore: 92,
+      debug: renderRes.debug
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.use('/outputs', express.static(outputDir));
