@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { UploadCloud, FileVideo, X, Sparkles, Clapperboard, Wand2, Music2, Search, Play, Pause, Check, Loader2, ChevronRight, MessageSquare, ListTodo, Layers, AlertCircle } from 'lucide-react';
 import { musicCatalog, type Song } from '../services/musicCatalog';
-import { analyzeClips, pingBackend } from '../services/api';
+import { analyzeClips, createJob, pingBackend } from '../services/api';
 
 const Equalizer = () => (
   <div className="flex items-end gap-[2px] h-3.5 w-3.5 shrink-0">

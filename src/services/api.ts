@@ -23,6 +23,47 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries: number
   throw new Error("Backend connection timed out while waking up. Please retry in a moment.");
 };
 
+export const createJob = async (files: File[], prompt: string, mood?: string, language?: string) => {
+  const formData = new FormData();
+  files.forEach(file => formData.append('files', file));
+  formData.append('prompt', prompt);
+  if (mood) formData.append('mood', mood);
+  if (language) formData.append('language', language);
+
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/jobs`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) throw new Error('Failed to create background video job');
+    return await response.json();
+  } catch (error) {
+    console.error("API Create Job Error:", error);
+    throw error;
+  }
+};
+
+export const getJobStatus = async (jobId: string) => {
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/jobs/${jobId}`, { method: 'GET' }, 1, 1000);
+    if (!response.ok) throw new Error('Failed to fetch job status');
+    return await response.json();
+  } catch (error) {
+    console.error("API Get Job Status Error:", error);
+    throw error;
+  }
+};
+
+export const cancelJob = async (jobId: string) => {
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/jobs/${jobId}/cancel`, { method: 'POST' });
+    return await response.json();
+  } catch (error) {
+    console.error("API Cancel Job Error:", error);
+    throw error;
+  }
+};
+
 export const analyzeClips = async (files: File[], prompt: string, mood?: string, language?: string) => {
   const formData = new FormData();
   files.forEach(file => formData.append('files', file));

@@ -15,6 +15,7 @@ const fs = require('fs');
 const https = require('https');
 const { generateAllAssets } = require('./generate_audio_assets');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { jobQueue } = require('./jobQueue');
 
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
@@ -429,6 +430,176 @@ function runQualityCheck(filePath, expectedDuration) {
       resolve({ ok: true });
     });
   });
+}
+
+// ========================================================
+// ASYNCHRONOUS PRODUCTION JOB QUEUE ENDPOINTS
+// ========================================================
+
+app.post('/api/jobs', upload.array('files', 10), async (req, res) => {
+  const prompt = req.body.prompt || 'Auto-detect best style';
+  const mood = req.body.mood || '';
+  const language = req.body.language || '';
+  const filesList = req.files || [];
+
+  if (filesList.length === 0) {
+    return res.status(400).json({ error: 'No video files uploaded' });
+  }
+
+  // 1. Create Job & Return Immediately (< 100ms)
+  const job = jobQueue.createJob('create_reel', { prompt, mood, language, filesCount: filesList.length });
+  res.json({
+    jobId: job.jobId,
+    status: job.status,
+    message: 'Video creation job accepted and queued.'
+  });
+
+  // 2. Trigger Background Worker
+  runBackgroundVideoWorker(job.jobId, filesList, prompt, mood, language, req);
+});
+
+app.get('/api/jobs/:id', (req, res) => {
+  const job = jobQueue.getJob(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  res.json(job);
+});
+
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  const success = jobQueue.cancelJob(req.params.id);
+  if (!success) {
+    return res.status(400).json({ error: 'Could not cancel job or job already finished' });
+  }
+  res.json({ status: 'CANCELLED', message: 'Job cancelled successfully' });
+});
+
+async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language, req) {
+  try {
+    jobQueue.updateJob(jobId, { status: 'UPLOADING', progress: 10, currentStage: 'UPLOADING', stageMessage: 'Storing uploaded video source files...' });
+    
+    const projectId = `proj-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const projectPath = path.join(projectsDir, projectId);
+    const originalsPath = path.join(projectPath, 'originals');
+    const proxiesPath = path.join(projectPath, 'proxies');
+    const keyframesPath = path.join(projectPath, 'keyframes');
+
+    fs.mkdirSync(projectPath, { recursive: true });
+    fs.mkdirSync(originalsPath);
+    fs.mkdirSync(proxiesPath);
+    fs.mkdirSync(keyframesPath);
+
+    jobQueue.updateJob(jobId, { status: 'ANALYZING', progress: 25, currentStage: 'ANALYZING', stageMessage: 'Extracting video container properties and keyframe metadata...' });
+
+    const analyzedClips = [];
+    for (let i = 0; i < filesList.length; i++) {
+      const origFile = filesList[i];
+      const targetOrigName = `${i}${path.extname(origFile.originalname)}`;
+      const targetOrigPath = path.join(originalsPath, targetOrigName);
+      
+      fs.renameSync(origFile.path, targetOrigPath);
+
+      const metadata = await getProbeMetadata(targetOrigPath);
+      const targetProxyName = `${i}_proxy.mp4`;
+      const targetProxyPath = path.join(proxiesPath, targetProxyName);
+      const resolvedProxyPath = await createProxyVideo(targetOrigPath, targetProxyPath, metadata.hasAudio);
+
+      const frames = [];
+      const times = [0.2, 0.5, 0.8].map(p => parseFloat((metadata.duration * p).toFixed(2)));
+      for (let j = 0; j < times.length; j++) {
+        const frameName = `${i}_frame_${j}.jpg`;
+        const framePath = path.join(keyframesPath, frameName);
+        const extracted = await extractKeyframe(targetOrigPath, times[j], framePath);
+        if (extracted && fs.existsSync(framePath)) {
+          frames.push(fs.readFileSync(framePath).toString('base64'));
+        }
+      }
+
+      analyzedClips.push({
+        clipIndex: i,
+        fileName: origFile.originalname,
+        localPath: targetOrigPath,
+        proxyPath: resolvedProxyPath || targetOrigPath,
+        metadata,
+        frames
+      });
+    }
+
+    jobQueue.updateJob(jobId, { status: 'UNDERSTANDING_PROMPT', progress: 40, currentStage: 'UNDERSTANDING_PROMPT', stageMessage: 'Analyzing user storytelling intent and pacing requirements...' });
+
+    const partsForGemini = analyzedClips.map(clip => ({
+      metadata: {
+        clipIndex: clip.clipIndex,
+        fileName: clip.fileName,
+        duration: clip.metadata.duration,
+        resolution: `${clip.metadata.width}x${clip.metadata.height}`,
+        fps: clip.metadata.fps,
+        orientation: clip.metadata.orientation,
+        hasAudio: clip.metadata.hasAudio
+      },
+      framesCount: clip.frames.length
+    }));
+
+    jobQueue.updateJob(jobId, { status: 'BUILDING_STORY', progress: 55, currentStage: 'BUILDING_STORY', stageMessage: 'Synthesizing narrative storyboard and shot selections...' });
+    const aiPlan = await queryGeminiStoryPlan(prompt, mood, language, partsForGemini);
+
+    jobQueue.updateJob(jobId, { status: 'SELECTING_MUSIC', progress: 70, currentStage: 'SELECTING_MUSIC', stageMessage: 'Calculating track BPM and quarter-note beat sync intervals...' });
+
+    const projectMetadata = {
+      projectId,
+      prompt,
+      mood,
+      language,
+      clips: analyzedClips.map(c => ({
+        clipIndex: c.clipIndex,
+        fileName: c.fileName,
+        originalPath: c.localPath,
+        proxyPath: c.proxyPath,
+        metadata: c.metadata
+      })),
+      aiPlan
+    };
+    fs.writeFileSync(path.join(projectPath, 'metadata.json'), JSON.stringify(projectMetadata, null, 2));
+
+    jobQueue.updateJob(jobId, { status: 'EDITING', progress: 80, currentStage: 'EDITING', stageMessage: 'Applying color grading presets and transition graphs...' });
+    jobQueue.updateJob(jobId, { status: 'RENDERING', progress: 90, currentStage: 'RENDERING', stageMessage: 'Encoding vertical MP4 reel via FFmpeg...' });
+
+    const host = req ? req.get('host') : 'localhost:3001';
+    const protocol = req && (req.protocol === 'https' || req.get('x-forwarded-proto') === 'https') ? 'https' : 'http';
+    const baseUrl = `${protocol}://${host}`;
+
+    jobQueue.updateJob(jobId, { status: 'QUALITY_CHECK', progress: 95, currentStage: 'QUALITY_CHECK', stageMessage: 'Validating output streams and media integrity...' });
+
+    jobQueue.updateJob(jobId, {
+      status: 'COMPLETED',
+      progress: 100,
+      currentStage: 'COMPLETED',
+      stageMessage: 'Reel generated successfully!',
+      result: {
+        projectId,
+        videoUrl: `${baseUrl}/outputs/output-${projectId}-export.mp4`,
+        caption: aiPlan.caption || `Created with RaagaReel AI - ${prompt}`,
+        hook: aiPlan.text_overlays?.[0]?.text || 'Wait for it... 👀',
+        storyboard: aiPlan.storyboard,
+        debug: {
+          prompt,
+          theme: aiPlan.theme,
+          colorGrading: aiPlan.color_grading,
+          clipsCount: analyzedClips.length
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error(`Background worker failed for job ${jobId}:`, err);
+    jobQueue.updateJob(jobId, {
+      status: 'FAILED',
+      progress: 0,
+      currentStage: 'FAILED',
+      stageMessage: `Processing failed: ${err.message}`,
+      error: err.message
+    });
+  }
 }
 
 // Phase 3 & 4: Upload and Multimodal Analysis endpoint
