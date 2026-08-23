@@ -290,25 +290,57 @@ const Upload = () => {
     setShowMusicDrawer(false);
   };
 
-  const handleProcess = () => {
-    if (!projectId || storyboard.length === 0) return;
+  const handleProcess = async () => {
+    if (files.length === 0) return;
     if (audioRef.current) {
       audioRef.current.pause();
       setIsPlayingSongId(null);
     }
 
-    navigate('/processing', { 
-      state: { 
-        projectId,
+    setIsScanning(true);
+    const finalPrompt = prompt || `Edited with focus on ${curationChoices.focus} in ${curationChoices.style} style.`;
+
+    try {
+      // Submit via Asynchronous Production Job Queue (< 100ms response time)
+      const jobRes = await createJob(
         files, 
-        prompt: prompt || `Edited with focus on ${curationChoices.focus} in ${curationChoices.style} style.`,
-        mood: selectedSong.mood,
-        language: selectedSong.language,
-        song: selectedSong,
-        customAudio: customAudioFile,
-        storyboard
-      } 
-    });
+        finalPrompt, 
+        selectedSong?.mood !== 'Custom' ? selectedSong?.mood : undefined,
+        selectedSong?.language !== 'Custom' ? selectedSong?.language : undefined
+      );
+
+      navigate('/processing', { 
+        state: { 
+          jobId: jobRes.jobId,
+          projectId: projectId || undefined,
+          prompt: finalPrompt,
+          mood: selectedSong.mood,
+          language: selectedSong.language,
+          song: selectedSong,
+          customAudio: customAudioFile
+        } 
+      });
+    } catch (err: any) {
+      console.warn("Async job submission fallback to direct sync render:", err);
+      if (projectId && storyboard.length > 0) {
+        navigate('/processing', { 
+          state: { 
+            projectId,
+            files, 
+            prompt: finalPrompt,
+            mood: selectedSong.mood,
+            language: selectedSong.language,
+            song: selectedSong,
+            customAudio: customAudioFile,
+            storyboard
+          } 
+        });
+      } else {
+        setScanError("Job submission failed. Please check network connection.");
+      }
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const displayedSongs = (() => {
@@ -619,14 +651,14 @@ const Upload = () => {
           <div className="pt-2">
             <button
               onClick={handleProcess}
-              disabled={files.length === 0 || chatStep < 4}
+              disabled={files.length === 0 || isScanning}
               className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                files.length === 0 || chatStep < 4
+                files.length === 0 || isScanning
                   ? 'bg-white/[0.04] text-gray-600 border border-white/5 cursor-not-allowed'
                   : 'bg-gradient-to-r from-primary to-accent text-white shadow-[0_0_25px_rgba(139,92,246,0.35)] hover:scale-[1.01] active:scale-[0.98]'
               }`}
             >
-              {chatStep < 4 && files.length > 0 ? "Complete Interview first" : "DIRECT REEL & EXPORT"} 
+              {isScanning ? "DIRECTING REEL..." : "DIRECT REEL & EXPORT"} 
               <Wand2 className="w-4 h-4 fill-white" />
             </button>
           </div>
