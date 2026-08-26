@@ -803,7 +803,11 @@ function runQualityCheck(outputFilePath, expectedDuration) {
 
 // Helper function to resolve public URL for output video
 function getPublicVideoUrl(outputFileName, req) {
-  const isCloud = !!process.env.RENDER || !!process.env.PORT;
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const cleanUrl = process.env.RENDER_EXTERNAL_URL.replace(/\/+$/, '');
+    return `${cleanUrl}/outputs/${outputFileName}`;
+  }
+  const isCloud = !!process.env.RENDER;
   if (isCloud) {
     return `https://raga-reel-video-editor-for-the-passion.onrender.com/outputs/${outputFileName}`;
   }
@@ -833,16 +837,45 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
   }
 
-  let musicPath = path.join(__dirname, 'music', `${aiPlan.music_recommendation.mood.toLowerCase()}_hype.wav`);
-  const localMoodFile = path.join(__dirname, 'music', `english_${aiPlan.music_recommendation.mood.toLowerCase()}.wav`);
+  let musicPath = path.join(__dirname, 'music', `${(aiPlan.music_recommendation?.mood || 'cinematic').toLowerCase()}_hype.wav`);
+  const localMoodFile = path.join(__dirname, 'music', `english_${(aiPlan.music_recommendation?.mood || 'cinematic').toLowerCase()}.wav`);
   if (fs.existsSync(localMoodFile)) {
     musicPath = localMoodFile;
   }
 
+  // Generate ElevenLabs Voiceover if key present
   let voiceoverPath = null;
-  const voicePrompt = aiPlan.text_overlays?.find(o => o.style === 'hook')?.text || aiPlan.hook;
+  const rawElevenKey = (process.env.ELEVENLABS_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  const voicePrompt = aiPlan.text_overlays?.find(o => o.style === 'hook')?.text || aiPlan.hook || aiPlan.theme;
 
-  const bpm = aiPlan.music_recommendation.bpm || 120;
+  if (rawElevenKey && voicePrompt && !useProxy) {
+    try {
+      const voiceId = 'pNInz6obpgDQGcFmaJgB'; // Adam Voice
+      const resTTS = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': rawElevenKey
+        },
+        body: JSON.stringify({
+          text: voicePrompt,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: { stability: 0.75, similarity_boost: 0.75 }
+        })
+      });
+
+      if (resTTS.ok) {
+        const arrayBuffer = await resTTS.arrayBuffer();
+        voiceoverPath = path.join(projectPath, `voiceover-${Date.now()}.mp3`);
+        fs.writeFileSync(voiceoverPath, Buffer.from(arrayBuffer));
+        console.log(`Successfully generated ElevenLabs voiceover: ${voiceoverPath}`);
+      }
+    } catch (err) {
+      console.warn('ElevenLabs TTS generation failed (non-critical):', err.message);
+    }
+  }
+
+  const bpm = aiPlan.music_recommendation?.bpm || 120;
   const beats = calculateBeats(bpm, 60);
 
   const orderedFiles = [];
@@ -851,7 +884,7 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
   activeStoryboard.forEach((scene) => {
     const clip = clips.find(c => c.clipIndex === scene.clipIndex);
     if (clip) {
-      const isCloud = !!process.env.RENDER || !!process.env.PORT;
+      const isCloud = !!process.env.RENDER;
       let filePath = clip.originalPath;
       if (useProxy || isCloud) {
         if (clip.proxyPath && fs.existsSync(clip.proxyPath)) {
@@ -877,7 +910,7 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
   const outputFileName = `output-${projectId}-${useProxy ? 'preview' : 'export'}.mp4`;
   const outputPath = path.join(outputDir, outputFileName);
 
-  const isCloudEnv = !!process.env.RENDER || !!process.env.PORT;
+  const isCloudEnv = !!process.env.RENDER;
   const canvasW = useProxy ? 360 : (isCloudEnv ? 720 : 1080);
   const canvasH = useProxy ? 640 : (isCloudEnv ? 1280 : 1920);
 
@@ -958,10 +991,37 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     videoOutputTag = `textv${aiPlan.text_overlays.length - 1}`;
   }
 
+  let voDuration = 0;
+  if (voiceoverPath && fs.existsSync(voiceoverPath)) {
+    try {
+      voDuration = await new Promise((resolve) => {
+        ffmpeg.ffprobe(voiceoverPath, (err, m) => {
+          if (err) return resolve(4.0);
+          resolve(parseFloat(m.format.duration) || 4.0);
+        });
+      });
+    } catch (e) {
+      voDuration = 4.0;
+    }
+  }
+
   const musicInputIndex = orderedFiles.length;
-  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2147483647,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=0.85[bgm]; `;
-  filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
-  filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
+  let dynamicBgmVolume = '0.85';
+  if (voDuration > 0) {
+    dynamicBgmVolume = `if(between(t,0,${voDuration.toFixed(2)}),0.2,0.85)`;
+  }
+
+  filterComplex += `[${musicInputIndex}:a]aloop=loop=-1:size=2147483647,atrim=duration=${totalDuration.toFixed(2)},asetpts=PTS-STARTPTS,aresample=44100,aformat=channel_layouts=stereo,volume=eval=frame:volume='${dynamicBgmVolume}'[bgm]; `;
+
+  if (voiceoverPath && fs.existsSync(voiceoverPath)) {
+    const voInputIndex = musicInputIndex + 1;
+    filterComplex += `[${voInputIndex}:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.8[vo]; `;
+    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=1.8[music]; `;
+    filterComplex += `[ambient][music][vo]amix=inputs=3:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
+  } else {
+    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
+    filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
+  }
 
   return new Promise((resolve, reject) => {
     let command = ffmpeg();
@@ -970,6 +1030,9 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
         .inputOptions([`-ss ${file.startTime}`, `-t ${file.duration}`]);
     });
     command = command.input(musicPath);
+    if (voiceoverPath && fs.existsSync(voiceoverPath)) {
+      command = command.input(voiceoverPath);
+    }
 
     const startTimer = Date.now();
     command
@@ -993,6 +1056,10 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
         const renderTime = Date.now() - startTimer;
         console.log(`Render complete in ${renderTime}ms.`);
 
+        if (voiceoverPath && fs.existsSync(voiceoverPath)) {
+          try { fs.unlinkSync(voiceoverPath); } catch (e) {}
+        }
+
         const qcResult = await runQualityCheck(outputPath, totalDuration);
         if (!qcResult.ok) {
           return reject(new Error(`Video Quality Control check failed: ${qcResult.reason}`));
@@ -1014,6 +1081,9 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
       })
       .on('error', (err) => {
         console.error('FFmpeg Render Error:', err.message);
+        if (voiceoverPath && fs.existsSync(voiceoverPath)) {
+          try { fs.unlinkSync(voiceoverPath); } catch (e) {}
+        }
         reject(new Error(`Video rendering failed: ${err.message}`));
       })
       .save(outputPath);
