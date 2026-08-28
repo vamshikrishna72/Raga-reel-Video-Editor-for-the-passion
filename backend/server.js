@@ -1017,10 +1017,10 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     const voInputIndex = musicInputIndex + 1;
     filterComplex += `[${voInputIndex}:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.8[vo]; `;
     filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=1.8[music]; `;
-    filterComplex += `[ambient][music][vo]amix=inputs=3:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
+    filterComplex += `[ambient][music][vo]amix=inputs=3:duration=first:dropout_transition=2[outa]`;
   } else {
-    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=2.0[music]; `;
-    filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2,loudnorm=I=-16:LRA=11:TP=-1.5[outa]`;
+    filterComplex += `[rawa]volume=0.35[ambient]; [bgm]volume=1.8[music]; `;
+    filterComplex += `[ambient][music]amix=inputs=2:duration=first:dropout_transition=2[outa]`;
   }
 
   return new Promise((resolve, reject) => {
@@ -1038,15 +1038,16 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     command
       .complexFilter(filterComplex, [videoOutputTag, 'outa'])
       .outputOptions('-c:v libx264')
-      .outputOptions(isCloudEnv ? '-preset ultrafast' : '-preset fast')
-      .outputOptions(isCloudEnv ? '-b:v 2.5M' : '-b:v 5M')
-      .outputOptions(isCloudEnv ? '-maxrate 3.5M' : '-maxrate 7M')
-      .outputOptions(isCloudEnv ? '-bufsize 5M' : '-bufsize 10M')
+      .outputOptions('-preset ultrafast')
+      .outputOptions('-tune zerolatency')
+      .outputOptions(isCloudEnv ? '-b:v 2M' : '-b:v 4M')
+      .outputOptions(isCloudEnv ? '-maxrate 2.8M' : '-maxrate 6M')
+      .outputOptions(isCloudEnv ? '-bufsize 4M' : '-bufsize 8M')
       .outputOptions('-movflags +faststart')
       .outputOptions('-threads 2')
       .outputOptions('-pix_fmt yuv420p')
       .outputOptions('-c:a aac')
-      .outputOptions('-b:a 192k')
+      .outputOptions('-b:a 128k')
       .outputOptions('-y')
       .outputOptions(`-t ${totalDuration.toFixed(2)}`)
       .on('start', (cmd) => {
