@@ -995,6 +995,18 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     default: colorFilter = ',eq=contrast=1.08:saturation=1.12'; break;
   }
 
+  // Real-time audio stream probing per clip file to prevent FFmpeg Stream specifier ':a' errors on silent videos
+  for (let i = 0; i < orderedFiles.length; i++) {
+    const f = orderedFiles[i];
+    f.hasVerifiedAudio = await new Promise((resolve) => {
+      ffmpeg.ffprobe(f.path, (err, metadata) => {
+        if (err || !metadata || !metadata.streams) return resolve(false);
+        const aStream = metadata.streams.find(s => s.codec_type === 'audio');
+        resolve(!!aStream);
+      });
+    });
+  }
+
   orderedFiles.forEach((file, index) => {
     const dur = file.duration;
     const trans = file.transition;
@@ -1019,7 +1031,7 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     filterComplex += `[fgin_${index}]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease[fg_${index}]; `;
     filterComplex += `[bg_${index}][fg_${index}]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p${colorFilter}${zoomFilter}${transFilter}[v${index}]; `;
 
-    if (file.hasAudio) {
+    if (file.hasVerifiedAudio) {
       filterComplex += `[${index}:a]aresample=44100,aformat=channel_layouts=stereo[a${index}]; `;
     } else {
       filterComplex += `anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${dur},asetpts=PTS-STARTPTS[a${index}]; `;
