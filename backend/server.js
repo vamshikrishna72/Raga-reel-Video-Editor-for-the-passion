@@ -377,6 +377,10 @@ async function queryGeminiRevision(instruction, currentStoryboard, analyzedClips
 You are RaagaReel's AI Film Editor. You are given a current storyboard plan, metadata of available uploaded clips, and a user revision instruction.
 Update the storyboard, pacing, transitions, text overlays, or music recommendation based on the user's natural language request.
 
+CRITICAL MUSIC INSTRUCTIONS:
+If the user asks to change music, use a different track, change language (e.g. Telugu, English, Hindi), or change mood (e.g. hype, romantic, chill, motivational):
+Update "music_recommendation": { "songName": "Specific requested or recommended song name", "mood": "hype/chill/romantic/cinematic/travel/motivation/emotional", "language": "Telugu/English/Hindi", "bpm": number }
+
 User Instruction: "${instruction}"
 
 Current Storyboard & Settings:
@@ -385,7 +389,7 @@ ${JSON.stringify(currentStoryboard, null, 2)}
 Clip Metadata:
 ${JSON.stringify(analyzedClips, null, 2)}
 
-Return a complete updated JSON plan matching the same format structure.
+Return a complete updated JSON plan matching the exact same format structure.
 `;
 
   for (const modelName of candidateModels) {
@@ -837,10 +841,72 @@ async function renderProjectPipeline(projectId, options = {}, req = null) {
     fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
   }
 
-  let musicPath = path.join(__dirname, 'music', `${(aiPlan.music_recommendation?.mood || 'cinematic').toLowerCase()}_hype.wav`);
-  const localMoodFile = path.join(__dirname, 'music', `english_${(aiPlan.music_recommendation?.mood || 'cinematic').toLowerCase()}.wav`);
-  if (fs.existsSync(localMoodFile)) {
-    musicPath = localMoodFile;
+  // Dynamic Soundtrack Resolution System (Supports Catalog, iTunes Search, User Uploads, and Mood Fallbacks)
+  let musicPath = path.join(__dirname, 'music', 'english_hype.wav');
+  let targetSongName = options.songTitle || aiPlan.music_recommendation?.songName || aiPlan.music_recommendation?.title;
+  let targetArtist = options.songArtist || aiPlan.music_recommendation?.artist || '';
+  let resolvedPreviewUrl = options.previewUrl;
+
+  if (options.customAudio && options.customAudio.path && fs.existsSync(options.customAudio.path)) {
+    musicPath = options.customAudio.path;
+    console.log(`Using user uploaded custom audio: ${musicPath}`);
+  } else {
+    // Search iTunes on-the-fly if song name is present but preview URL is missing
+    if ((!resolvedPreviewUrl || resolvedPreviewUrl === 'undefined' || resolvedPreviewUrl === 'null') && targetSongName) {
+      console.log(`Searching iTunes soundtrack preview for '${targetSongName}' by '${targetArtist}'...`);
+      try {
+        const primaryArtist = targetArtist ? targetArtist.split(',')[0].trim() : '';
+        let term = `${targetSongName} ${primaryArtist}`.trim();
+        let searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
+        let searchData = await searchRes.json();
+        
+        if (!searchData.results || !searchData.results[0]?.previewUrl) {
+          term = targetSongName;
+          searchRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=1`);
+          searchData = await searchRes.json();
+        }
+
+        if (searchData.results && searchData.results[0]?.previewUrl) {
+          resolvedPreviewUrl = searchData.results[0].previewUrl;
+          console.log(`Found iTunes soundtrack preview URL: ${resolvedPreviewUrl}`);
+        }
+      } catch (err) {
+        console.warn('iTunes music resolution failed:', err.message);
+      }
+    }
+
+    if (resolvedPreviewUrl && resolvedPreviewUrl !== 'undefined' && resolvedPreviewUrl !== 'null') {
+      const songCacheName = 'preview-' + resolvedPreviewUrl.replace(/[^a-zA-Z0-9]/g, '_').slice(-60) + '.m4a';
+      const cachedSongPath = path.join(__dirname, 'music', songCacheName);
+      
+      if (fs.existsSync(cachedSongPath) && fs.statSync(cachedSongPath).size > 10000) {
+        musicPath = cachedSongPath;
+        console.log(`Using cached soundtrack preview: ${musicPath}`);
+      } else {
+        try {
+          console.log(`Downloading soundtrack preview from ${resolvedPreviewUrl}...`);
+          await downloadFile(resolvedPreviewUrl, cachedSongPath);
+          if (fs.existsSync(cachedSongPath) && fs.statSync(cachedSongPath).size > 10000) {
+            musicPath = cachedSongPath;
+            console.log(`Downloaded and cached soundtrack: ${musicPath}`);
+          }
+        } catch (err) {
+          console.error('Failed to download soundtrack preview:', err.message);
+        }
+      }
+    } else {
+      // Fallback to local mood/language audio asset
+      const mood = (aiPlan.music_recommendation?.mood || 'hype').toLowerCase();
+      const lang = (aiPlan.music_recommendation?.language || 'english').toLowerCase();
+      const langMoodFile = path.join(__dirname, 'music', `${lang}_${mood}.wav`);
+      const moodFile = path.join(__dirname, 'music', `english_${mood}.wav`);
+      
+      if (fs.existsSync(langMoodFile)) {
+        musicPath = langMoodFile;
+      } else if (fs.existsSync(moodFile)) {
+        musicPath = moodFile;
+      }
+    }
   }
 
   // Generate ElevenLabs Voiceover if key present
