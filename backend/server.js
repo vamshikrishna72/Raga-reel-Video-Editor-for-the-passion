@@ -565,41 +565,47 @@ async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language
     fs.mkdirSync(proxiesPath);
     fs.mkdirSync(keyframesPath);
 
-    jobQueue.updateJob(jobId, { status: 'ANALYZING', progress: 25, currentStage: 'ANALYZING', stageMessage: 'Extracting video container properties and keyframe metadata...' });
+    jobQueue.updateJob(jobId, { status: 'ANALYZING', progress: 25, currentStage: 'ANALYZING', stageMessage: 'Extracting video container properties and keyframe metadata in parallel...' });
 
-    const analyzedClips = [];
-    for (let i = 0; i < filesList.length; i++) {
-      const origFile = filesList[i];
-      const targetOrigName = `${i}${path.extname(origFile.originalname)}`;
-      const targetOrigPath = path.join(originalsPath, targetOrigName);
-      
-      fs.renameSync(origFile.path, targetOrigPath);
+    // High-performance parallel extraction across all uploaded clips
+    const analyzedClips = await Promise.all(
+      filesList.map(async (origFile, i) => {
+        const targetOrigName = `${i}${path.extname(origFile.originalname)}`;
+        const targetOrigPath = path.join(originalsPath, targetOrigName);
+        fs.renameSync(origFile.path, targetOrigPath);
 
-      const metadata = await getProbeMetadata(targetOrigPath);
-      const targetProxyName = `${i}_proxy.mp4`;
-      const targetProxyPath = path.join(proxiesPath, targetProxyName);
-      const resolvedProxyPath = await createProxyVideo(targetOrigPath, targetProxyPath, metadata.hasAudio);
+        const metadata = await getProbeMetadata(targetOrigPath);
+        const targetProxyName = `${i}_proxy.mp4`;
+        const targetProxyPath = path.join(proxiesPath, targetProxyName);
 
-      const frames = [];
-      const times = [0.2, 0.5, 0.8].map(p => parseFloat((metadata.duration * p).toFixed(2)));
-      for (let j = 0; j < times.length; j++) {
-        const frameName = `${i}_frame_${j}.jpg`;
-        const framePath = path.join(keyframesPath, frameName);
-        const extracted = await extractKeyframe(targetOrigPath, times[j], framePath);
-        if (extracted && fs.existsSync(framePath)) {
-          frames.push(fs.readFileSync(framePath).toString('base64'));
-        }
-      }
+        // Run proxy creation and keyframe extraction concurrently
+        const [resolvedProxyPath, frames] = await Promise.all([
+          createProxyVideo(targetOrigPath, targetProxyPath, metadata.hasAudio),
+          (async () => {
+            const extractedFrames = [];
+            const times = [0.2, 0.5, 0.8].map(p => parseFloat((metadata.duration * p).toFixed(2)));
+            await Promise.all(times.map(async (timeVal, j) => {
+              const frameName = `${i}_frame_${j}.jpg`;
+              const framePath = path.join(keyframesPath, frameName);
+              const extracted = await extractKeyframe(targetOrigPath, timeVal, framePath);
+              if (extracted && fs.existsSync(framePath)) {
+                extractedFrames.push(fs.readFileSync(framePath).toString('base64'));
+              }
+            }));
+            return extractedFrames;
+          })()
+        ]);
 
-      analyzedClips.push({
-        clipIndex: i,
-        fileName: origFile.originalname,
-        localPath: targetOrigPath,
-        proxyPath: resolvedProxyPath || targetOrigPath,
-        metadata,
-        frames
-      });
-    }
+        return {
+          clipIndex: i,
+          fileName: origFile.originalname,
+          localPath: targetOrigPath,
+          proxyPath: resolvedProxyPath || targetOrigPath,
+          metadata,
+          frames
+        };
+      })
+    );
 
     jobQueue.updateJob(jobId, { status: 'UNDERSTANDING_PROMPT', progress: 40, currentStage: 'UNDERSTANDING_PROMPT', stageMessage: 'Analyzing user storytelling intent and pacing requirements...' });
 
