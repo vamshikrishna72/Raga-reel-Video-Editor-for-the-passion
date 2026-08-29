@@ -301,12 +301,14 @@ const Upload = () => {
     const finalPrompt = prompt || `Edited with focus on ${curationChoices.focus} in ${curationChoices.style} style.`;
 
     try {
-      // Submit via Asynchronous Production Job Queue (< 100ms response time)
+      // Submit via Asynchronous Production Job Queue (< 100ms response time) with selected music payload
       const jobRes = await createJob(
         files, 
         finalPrompt, 
         selectedSong?.mood !== 'Custom' ? selectedSong?.mood : undefined,
-        selectedSong?.language !== 'Custom' ? selectedSong?.language : undefined
+        selectedSong?.language !== 'Custom' ? selectedSong?.language : undefined,
+        selectedSong,
+        customAudioFile
       );
 
       navigate('/processing', { 

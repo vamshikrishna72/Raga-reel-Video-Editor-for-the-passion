@@ -23,12 +23,26 @@ const fetchWithRetry = async (url: string, options: RequestInit, retries: number
   throw new Error("Backend connection timed out while waking up. Please retry in a moment.");
 };
 
-export const createJob = async (files: File[], prompt: string, mood?: string, language?: string) => {
+
+
+export const createJob = async (
+  files: File[], 
+  prompt: string, 
+  mood?: string, 
+  language?: string,
+  song?: { id?: string; title?: string; artist?: string; previewUrl?: string; mood?: string; language?: string } | null,
+  customAudio?: File | null
+) => {
   const formData = new FormData();
   files.forEach(file => formData.append('files', file));
   formData.append('prompt', prompt);
   if (mood) formData.append('mood', mood);
   if (language) formData.append('language', language);
+  if (song?.title) formData.append('songTitle', song.title);
+  if (song?.artist) formData.append('songArtist', song.artist);
+  if (song?.previewUrl) formData.append('previewUrl', song.previewUrl);
+  if (song?.id) formData.append('songId', song.id);
+  if (customAudio) formData.append('customAudio', customAudio);
 
   try {
     const response = await fetchWithRetry(`${API_BASE_URL}/api/jobs`, {
@@ -135,12 +149,14 @@ export const reviseStoryboard = async (projectId: string, instruction: string) =
 
 export const getKeysStatus = async () => {
   try {
-    const response = await fetchWithRetry(`${API_BASE_URL}/api/keys/status`, { method: 'GET' }, 1, 1000);
-    if (!response.ok) throw new Error('Status check failed');
-    return await response.json();
+    const response = await fetchWithRetry(`${API_BASE_URL}/api/health`, { method: 'GET' }, 1, 1000);
+    if (response.ok) {
+      return await response.json();
+    }
   } catch (error) {
-    return { gemini: 'error', elevenlabs: 'error' };
+    console.warn("Keys status check failed:", error);
   }
+  return { gemini: 'error', elevenlabs: 'error' };
 };
 
 export const getTrends = async () => {

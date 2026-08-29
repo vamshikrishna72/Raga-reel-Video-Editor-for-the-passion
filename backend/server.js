@@ -437,29 +437,101 @@ function runQualityCheck(filePath, expectedDuration) {
 }
 
 // ========================================================
+// API Health Diagnostic Endpoint (Performs real API connectivity & authentication tests)
+app.get('/api/health', async (req, res) => {
+  const status = {
+    gemini: 'missing',
+    elevenlabs: 'missing',
+    geminiDetails: 'Not configured',
+    elevenlabsDetails: 'Not configured'
+  };
+
+  // Real Gemini API Health Verification
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  if (geminiKey) {
+    try {
+      const genAI = new GoogleGenerativeAI(geminiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const ping = await model.generateContent("ping");
+      if (ping && ping.response) {
+        status.gemini = 'working';
+        status.geminiDetails = 'CONNECTED (gemini-2.5-flash operational)';
+      } else {
+        status.gemini = 'error';
+        status.geminiDetails = 'UNEXPECTED RESPONSE';
+      }
+    } catch (err) {
+      const msg = (err.message || '').toLowerCase();
+      status.gemini = 'error';
+      if (msg.includes('api_key') || msg.includes('auth')) {
+        status.geminiDetails = 'AUTHENTICATION ERROR';
+      } else if (msg.includes('quota') || msg.includes('429')) {
+        status.geminiDetails = 'QUOTA ERROR';
+      } else {
+        status.geminiDetails = 'SERVICE UNREACHABLE';
+      }
+    }
+  }
+
+  // Real ElevenLabs API Health Verification
+  const elevenKey = (process.env.ELEVENLABS_API_KEY || '').trim().replace(/^['"]|['"]$/g, '');
+  if (elevenKey) {
+    try {
+      const userRes = await fetch('https://api.elevenlabs.io/v1/user', {
+        headers: { 'xi-api-key': elevenKey }
+      });
+      if (userRes.ok) {
+        status.elevenlabs = 'working';
+        status.elevenlabsDetails = 'CONNECTED (Voiceover Engine operational)';
+      } else if (userRes.status === 401) {
+        status.elevenlabs = 'error';
+        status.elevenlabsDetails = 'AUTHENTICATION ERROR';
+      } else if (userRes.status === 429) {
+        status.elevenlabs = 'error';
+        status.elevenlabsDetails = 'QUOTA ERROR';
+      } else {
+        status.elevenlabs = 'error';
+        status.elevenlabsDetails = `HTTP ${userRes.status}`;
+      }
+    } catch (err) {
+      status.elevenlabs = 'error';
+      status.elevenlabsDetails = 'NETWORK ERROR';
+    }
+  }
+
+  res.json(status);
+});
+
 // ASYNCHRONOUS PRODUCTION JOB QUEUE ENDPOINTS
 // ========================================================
 
-app.post('/api/jobs', upload.array('files', 10), async (req, res) => {
+app.post('/api/jobs', upload.fields([{ name: 'files', maxCount: 10 }, { name: 'customAudio', maxCount: 1 }]), async (req, res) => {
   const prompt = req.body.prompt || 'Auto-detect best style';
   const mood = req.body.mood || '';
   const language = req.body.language || '';
-  const filesList = req.files || [];
+  const songTitle = req.body.songTitle || '';
+  const songArtist = req.body.songArtist || '';
+  const previewUrl = req.body.previewUrl || '';
+  const songId = req.body.songId || '';
+  const filesList = req.files && req.files['files'] ? req.files['files'] : [];
+  const customAudio = req.files && req.files['customAudio'] ? req.files['customAudio'][0] : null;
 
   if (filesList.length === 0) {
     return res.status(400).json({ error: 'No video files uploaded' });
   }
 
+  const musicPayload = { songTitle, songArtist, previewUrl, songId, customAudio };
+
   // 1. Create Job & Return Immediately (< 100ms)
-  const job = jobQueue.createJob('create_reel', { prompt, mood, language, filesCount: filesList.length });
+  const job = jobQueue.createJob('create_reel', { prompt, mood, language, songTitle, filesCount: filesList.length });
   res.json({
     jobId: job.jobId,
     status: job.status,
     message: 'Video creation job accepted and queued.'
   });
 
-  // 2. Trigger Background Worker
-  runBackgroundVideoWorker(job.jobId, filesList, prompt, mood, language, req);
+  // 2. Trigger Background Worker with complete music payload
+  runBackgroundVideoWorker(job.jobId, filesList, prompt, mood, language, musicPayload, req);
 });
 
 app.get('/api/jobs/:id', (req, res) => {
@@ -478,7 +550,7 @@ app.post('/api/jobs/:id/cancel', (req, res) => {
   res.json({ status: 'CANCELLED', message: 'Job cancelled successfully' });
 });
 
-async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language, req) {
+async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language, musicPayload = {}, req = null) {
   try {
     jobQueue.updateJob(jobId, { status: 'UPLOADING', progress: 10, currentStage: 'UPLOADING', stageMessage: 'Storing uploaded video source files...' });
     
@@ -554,6 +626,13 @@ async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language
       prompt,
       mood,
       language,
+      musicPayload: {
+        songTitle: musicPayload.songTitle,
+        songArtist: musicPayload.songArtist,
+        previewUrl: musicPayload.previewUrl,
+        songId: musicPayload.songId
+      },
+      versions: [],
       clips: analyzedClips.map(c => ({
         clipIndex: c.clipIndex,
         fileName: c.fileName,
@@ -568,8 +647,8 @@ async function runBackgroundVideoWorker(jobId, filesList, prompt, mood, language
     jobQueue.updateJob(jobId, { status: 'EDITING', progress: 80, currentStage: 'EDITING', stageMessage: 'Applying color grading presets and transition graphs...' });
     jobQueue.updateJob(jobId, { status: 'RENDERING', progress: 90, currentStage: 'RENDERING', stageMessage: 'Encoding vertical MP4 reel via FFmpeg...' });
 
-    // Execute real FFmpeg video rendering pipeline
-    const renderRes = await renderProjectPipeline(projectId, {}, req);
+    // Execute real FFmpeg video rendering pipeline with selected music options
+    const renderRes = await renderProjectPipeline(projectId, musicPayload, req);
 
     jobQueue.updateJob(jobId, { status: 'QUALITY_CHECK', progress: 95, currentStage: 'QUALITY_CHECK', stageMessage: 'Validating output streams and media integrity...' });
 
@@ -744,6 +823,17 @@ app.post('/api/reedit', async (req, res) => {
   try {
     const projectMetadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     
+    // Track version history (V1, V2, V3...)
+    projectMetadata.versions = projectMetadata.versions || [];
+    const currentVerIndex = projectMetadata.versions.length + 1;
+    const versionEntry = {
+      versionId: `v${currentVerIndex}`,
+      timestamp: new Date().toISOString(),
+      instruction,
+      aiPlan: projectMetadata.aiPlan,
+      videoUrl: projectMetadata.currentVideoUrl || null
+    };
+
     // Call Gemini editor to parse instruction into storyboard deltas
     const updatedPlan = await queryGeminiRevision(
       instruction,
@@ -751,13 +841,20 @@ app.post('/api/reedit', async (req, res) => {
       projectMetadata.clips
     );
 
+    projectMetadata.aiPlan = updatedPlan;
+    projectMetadata.versions.push(versionEntry);
+
     // Execute FFmpeg render for revised storyboard
     const renderRes = await renderProjectPipeline(projectId, { useProxy: true }, req);
+    projectMetadata.currentVideoUrl = renderRes.videoUrl;
+    fs.writeFileSync(metadataPath, JSON.stringify(projectMetadata, null, 2));
 
     res.json({
       status: 'success',
       projectId,
+      versionId: `v${currentVerIndex}`,
       videoUrl: renderRes.videoUrl,
+      versionsCount: projectMetadata.versions.length,
       storyboard: updatedPlan.storyboard,
       textOverlays: updatedPlan.text_overlays,
       colorGrading: updatedPlan.color_grading,
