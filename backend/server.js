@@ -173,22 +173,22 @@ function getProbeMetadata(filePath) {
   });
 }
 
-// Cloud-optimized lightweight video proxy creator with integrity verification
+// Cloud-optimized lightweight video proxy creator with smart background blur adaptation & integrity verification
 function createProxyVideo(inputPath, outputPath, hasAudio = true) {
   return new Promise((resolve) => {
     if (fs.existsSync(outputPath)) {
       try { fs.unlinkSync(outputPath); } catch (e) {}
     }
 
+    const filterStr = "[0:v]split=2[bgin][fgin]; [bgin]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,boxblur=16:2,eq=brightness=-0.18[bg]; [fgin]scale=540:960:force_original_aspect_ratio=decrease[fg]; [bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[outv]";
+
     let cmd = ffmpeg(inputPath)
-      .videoFilters([
-        "scale=540:960:force_original_aspect_ratio=decrease",
-        "pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black"
-      ])
+      .complexFilter(filterStr, 'outv')
       .videoCodec('libx264')
       .outputOptions([
         '-preset ultrafast',
-        '-crf 24',
+        '-tune zerolatency',
+        '-crf 26',
         '-pix_fmt yuv420p',
         '-movflags +faststart',
         '-threads 2',
