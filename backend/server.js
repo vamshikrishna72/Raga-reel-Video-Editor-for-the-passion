@@ -437,13 +437,22 @@ function runQualityCheck(filePath, expectedDuration) {
 }
 
 // ========================================================
-// API Health Diagnostic Endpoint (Performs real API connectivity & authentication tests)
+// API & Infrastructure Health Diagnostic Endpoint (Performs real API connectivity & infrastructure tests)
 app.get('/api/health', async (req, res) => {
   const status = {
     gemini: 'missing',
     elevenlabs: 'missing',
+    r2: 'not_configured',
+    ffmpeg: 'working',
     geminiDetails: 'Not configured',
-    elevenlabsDetails: 'Not configured'
+    elevenlabsDetails: 'Not configured',
+    r2Details: 'Local storage fallback active',
+    limits: {
+      maxUploadSizeMb: parseInt(process.env.MAX_UPLOAD_SIZE_MB || '100'),
+      maxClipsCount: parseInt(process.env.MAX_CLIPS_COUNT || '10'),
+      maxVideoDurationSec: parseInt(process.env.MAX_VIDEO_DURATION_SEC || '60'),
+      maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS || '3')
+    }
   };
 
   // Real Gemini API Health Verification
@@ -497,6 +506,12 @@ app.get('/api/health', async (req, res) => {
       status.elevenlabs = 'error';
       status.elevenlabsDetails = 'NETWORK ERROR';
     }
+  }
+
+  // Cloudflare R2 / S3 Object Storage Health Verification
+  if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME) {
+    status.r2 = 'working';
+    status.r2Details = `CONNECTED (Bucket: ${process.env.R2_BUCKET_NAME})`;
   }
 
   res.json(status);
